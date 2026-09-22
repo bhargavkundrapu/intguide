@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Monitor, Volume2, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react';
 
 export default function AudioCapture({ onAudioChunk, isListening, setIsListening, onTranscriptUpdate }) {
-  const [sourceType, setSourceType] = useState('tab'); // 'tab' | 'mic'
+  const [sourceType, setSourceType] = useState('tab');
   const [hasAudioTrack, setHasAudioTrack] = useState(null);
   const [trackLabel, setTrackLabel] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
@@ -41,7 +41,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
     }
   }, [onTranscriptUpdate]);
 
-  // Waveform canvas draw loop
+  // Canvas waveform loop
   useEffect(() => {
     let animId;
     const canvas = canvasRef.current;
@@ -60,13 +60,13 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
 
         for (let i = 0; i < bufferLength; i++) {
           const barHeight = (dataArray[i] / 255) * canvas.height;
-          ctx.fillStyle = '#6366f1';
+          ctx.fillStyle = '#4f46e5';
           ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
           x += barWidth + 1;
         }
       } else {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#27272a';
+        ctx.fillStyle = '#cbd5e1';
         ctx.fillRect(0, canvas.height / 2 - 1, canvas.width, 2);
       }
       animId = requestAnimationFrame(draw);
@@ -100,7 +100,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         setHasAudioTrack(false);
-        setErrorMessage('⚠️ No audio track found! When selecting a tab in Chrome, make sure to check "Share tab audio" at the bottom left of Chrome picker.');
+        setErrorMessage('⚠️ No audio track found! When selecting a tab in Chrome, make sure to check "Share tab audio".');
         stream.getTracks().forEach(t => t.stop());
         return;
       }
@@ -110,10 +110,8 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       setTrackLabel(track.label || (sourceType === 'tab' ? 'Chrome Tab Audio' : 'Microphone Input'));
       streamRef.current = stream;
 
-      // Extract ONLY audio tracks to create a pure Audio-Only MediaStream for MediaRecorder & Deepgram
       const audioOnlyStream = new MediaStream(audioTracks);
 
-      // Audio Context setup for volume visualizer
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioContextRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(audioOnlyStream);
@@ -122,7 +120,6 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      // Record PURE audio-only WebM stream and send to Deepgram WS
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         const recorder = new MediaRecorder(audioOnlyStream, { mimeType: 'audio/webm;codecs=opus' });
         recorder.ondataavailable = (e) => {
@@ -168,36 +165,36 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
 
   return (
     <div className="clean-card p-5">
-      <div className="flex items-center justify-between gap-4 mb-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Volume2 className="w-5 h-5 text-indigo-400" />
-            <h3 className="font-heading text-base font-bold text-white">Live Audio Capture</h3>
+            <Volume2 className="w-5 h-5 text-indigo-600" />
+            <h3 className="font-heading text-base font-bold text-slate-900">Live Audio Capture</h3>
             {isListening ? (
               <span className="pill-badge pill-badge-green">LISTENING LIVE</span>
             ) : (
               <span className="pill-badge pill-badge-amber">STANDBY</span>
             )}
           </div>
-          <p className="text-xs text-zinc-400">
+          <p className="text-xs text-slate-600">
             Captures interviewer speech directly from Chrome tab (Google Meet, Zoom, YouTube) or Microphone.
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="bg-zinc-900 p-1 rounded-lg border border-zinc-800 flex items-center gap-1">
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="bg-slate-100 p-1 rounded-lg border border-slate-200 flex items-center gap-1">
             <button
               onClick={() => { if (!isListening) setSourceType('tab'); }}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 ${
-                sourceType === 'tab' ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-white'
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                sourceType === 'tab' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Monitor className="w-3.5 h-3.5" /> Tab Audio
             </button>
             <button
               onClick={() => { if (!isListening) setSourceType('mic'); }}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 ${
-                sourceType === 'mic' ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-white'
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                sourceType === 'mic' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <Mic className="w-3.5 h-3.5" /> Mic Input
@@ -218,22 +215,22 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
 
       <canvas ref={canvasRef} className="waveform-canvas mb-2" width={600} height={40} />
 
-      <div className="flex items-center justify-between text-xs text-zinc-400">
+      <div className="flex items-center justify-between text-xs text-slate-500">
         <div>
           {hasAudioTrack === true && (
-            <span className="text-emerald-400 flex items-center gap-1 font-medium">
+            <span className="text-emerald-700 flex items-center gap-1 font-semibold">
               <CheckCircle className="w-3.5 h-3.5" /> Active Track: {trackLabel}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 text-zinc-400">
-          <ExternalLink className="w-3 h-3 text-indigo-400" />
+        <div className="flex items-center gap-1 text-slate-500">
+          <ExternalLink className="w-3 h-3 text-indigo-600" />
           <span>Keep Copilot open side-by-side or read on your phone!</span>
         </div>
       </div>
 
       {errorMessage && (
-        <div className="mt-3 p-3 bg-rose-950/50 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-center gap-2">
+        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs flex items-center gap-2">
           <AlertCircle className="w-4 h-4 shrink-0" />
           <span>{errorMessage}</span>
         </div>

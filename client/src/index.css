@@ -1,19 +1,19 @@
 :root {
-  --bg-dark: #09090b;
-  --bg-card: #121215;
-  --bg-card-hover: #18181b;
-  --border-subtle: #27272a;
+  --bg-body: #f8fafc;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --border-subtle: #e2e8f0;
   --border-active: #6366f1;
   
-  --primary: #6366f1;
-  --primary-hover: #4f46e5;
-  --accent-emerald: #10b981;
-  --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --accent-emerald: #059669;
+  --accent-amber: #d97706;
+  --accent-rose: #e11d48;
   
-  --text-primary: #ffffff;
-  --text-secondary: #a1a1aa;
-  --text-tertiary: #71717a;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
   
   --font-heading: 'Outfit', -apple-system, sans-serif;
   --font-body: 'Inter', -apple-system, sans-serif;
@@ -27,7 +27,7 @@
 }
 
 body {
-  background-color: var(--bg-dark);
+  background-color: var(--bg-body);
   color: var(--text-primary);
   font-family: var(--font-body);
   line-height: 1.5;
@@ -35,33 +35,34 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom Clean Scrollbars */
+/* Custom Scrollbar for Light Theme */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #cbd5e1;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #94a3b8;
 }
 
-/* Clean Minimal Card Panel */
+/* Light Theme Card Panel */
 .clean-card {
   background-color: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 14px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.2s ease;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .clean-card-active {
-  border-color: var(--border-active);
+  border-color: #a5b4fc;
+  box-shadow: 0 4px 20px -2px rgba(79, 70, 229, 0.1);
 }
 
 /* Buttons */
@@ -72,12 +73,13 @@ body {
   font-size: 0.875rem;
   border: none;
   border-radius: 10px;
-  padding: 0.6rem 1.2rem;
+  padding: 0.6rem 1.25rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  box-shadow: 0 2px 4px rgba(79, 70, 229, 0.2);
   transition: background-color 0.15s ease, transform 0.1s ease;
 }
 .btn-primary:hover {
@@ -88,33 +90,34 @@ body {
 }
 
 .btn-secondary {
-  background-color: #18181b;
+  background-color: #ffffff;
   color: var(--text-primary);
   font-weight: 500;
   font-size: 0.875rem;
   border: 1px solid var(--border-subtle);
   border-radius: 10px;
-  padding: 0.6rem 1.2rem;
+  padding: 0.6rem 1.25rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   transition: all 0.15s ease;
 }
 .btn-secondary:hover {
-  background-color: #27272a;
-  border-color: #3f3f46;
+  background-color: #f8fafc;
+  border-color: #cbd5e1;
 }
 
 .btn-danger {
-  background-color: rgba(244, 63, 94, 0.1);
-  color: #f43f5e;
+  background-color: #fef2f2;
+  color: #dc2626;
   font-weight: 500;
   font-size: 0.875rem;
-  border: 1px solid rgba(244, 63, 94, 0.3);
+  border: 1px solid #fecaca;
   border-radius: 10px;
-  padding: 0.6rem 1.2rem;
+  padding: 0.6rem 1.25rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -123,17 +126,17 @@ body {
   transition: all 0.15s ease;
 }
 .btn-danger:hover {
-  background-color: rgba(244, 63, 94, 0.2);
+  background-color: #fee2e2;
 }
 
 .btn-amber {
-  background-color: rgba(245, 158, 11, 0.1);
-  color: #f59e0b;
+  background-color: #fffbeb;
+  color: #d97706;
   font-weight: 500;
   font-size: 0.875rem;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  border: 1px solid #fde68a;
   border-radius: 10px;
-  padding: 0.6rem 1.2rem;
+  padding: 0.6rem 1.25rem;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -142,14 +145,14 @@ body {
   transition: all 0.15s ease;
 }
 .btn-amber:hover {
-  background-color: rgba(245, 158, 11, 0.2);
+  background-color: #fef3c7;
 }
 
-/* Status Pill Badges */
+/* Light Theme Badges */
 .pill-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   padding: 0.25rem 0.65rem;
   border-radius: 9999px;
   font-size: 0.75rem;
@@ -157,34 +160,35 @@ body {
   font-family: var(--font-mono);
 }
 .pill-badge-green {
-  background-color: rgba(16, 185, 129, 0.15);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  background-color: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
 }
 .pill-badge-indigo {
-  background-color: rgba(99, 102, 241, 0.15);
-  color: #818cf8;
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  background-color: #eef2ff;
+  color: #4f46e5;
+  border: 1px solid #c7d2fe;
 }
 .pill-badge-amber {
-  background-color: rgba(245, 158, 11, 0.15);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  background-color: #fffbeb;
+  color: #d97706;
+  border: 1px solid #fde68a;
 }
 
-/* Audio Level Meter Canvas */
+/* Waveform Canvas */
 .waveform-canvas {
   width: 100%;
   height: 40px;
   border-radius: 8px;
-  background-color: #09090b;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
 }
 
-/* Mobile Screen Clean HUD */
+/* Mobile Screen Light Theme HUD */
 .mobile-clean-container {
   min-height: 100vh;
-  background-color: #09090b;
-  color: #ffffff;
+  background-color: #f8fafc;
+  color: #0f172a;
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
@@ -196,21 +200,24 @@ body {
   font-size: 1.85rem;
   font-weight: 800;
   line-height: 1.25;
-  color: #ffffff;
+  color: #0f172a;
   letter-spacing: -0.01em;
+  background-color: #ffffff;
+  border: 2px solid #6366f1;
+  box-shadow: 0 4px 20px rgba(79, 70, 229, 0.1);
 }
 
 .mobile-answer-bullet {
   font-size: 1.15rem;
   line-height: 1.45;
-  color: #e4e4e7;
+  color: #334155;
 }
 
 .mobile-answer-example {
-  background-color: #18181b;
-  border-left: 3px solid var(--primary);
+  background-color: #eef2ff;
+  border-left: 4px solid var(--primary);
   padding: 1rem;
-  border-radius: 0 8px 8px 0;
+  border-radius: 0 10px 10px 0;
   font-size: 1rem;
-  color: #a1a1aa;
+  color: #3730a3;
 }

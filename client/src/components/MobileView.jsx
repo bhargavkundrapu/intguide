@@ -18,7 +18,7 @@ export default function MobileView({
 }) {
   const [manualCode, setManualCode] = useState('');
 
-  // Robust answer parser supporting all LLM markdown header variants
+  // Robust answer parser
   const parseAnswer = (text) => {
     if (!text) return { direct: '', bullets: [], example: '' };
 
@@ -36,7 +36,6 @@ export default function MobileView({
     }
     let example = exampleMatch ? exampleMatch[1].trim() : '';
 
-    // Fallback: If structured headers fail, display full stream directly
     if (!direct && !bullets.length && !example) {
       direct = text.trim();
     }
@@ -48,17 +47,17 @@ export default function MobileView({
 
   return (
     <div className="mobile-clean-container">
-      {/* Header Bar */}
+      {/* Top Mobile Bar */}
       <div>
-        <div className="flex items-center justify-between pb-3 border-b border-zinc-800 mb-3">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
           <div className="flex items-center gap-2">
-            <Zap className="w-5 h-5 text-indigo-400 fill-indigo-400" />
-            <span className="font-heading font-extrabold text-lg tracking-tight">COPILOT HUD</span>
+            <Zap className="w-5 h-5 text-indigo-600 fill-indigo-600" />
+            <span className="font-heading font-extrabold text-lg tracking-tight text-slate-900">COPILOT HUD</span>
           </div>
 
           <div className="flex items-center gap-2">
             {ttft > 0 && (
-              <span className="font-mono text-xs text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800">
+              <span className="font-mono text-xs text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200 font-semibold">
                 ⚡ {(ttft / 1000).toFixed(2)}s
               </span>
             )}
@@ -74,16 +73,16 @@ export default function MobileView({
           </div>
         </div>
 
-        {/* Manual Pairing Input */}
+        {/* Manual Session Code Pairing Input */}
         {!wsConnected && (
-          <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-3 flex items-center gap-2">
-            <Key className="w-4 h-4 text-indigo-400 shrink-0" />
+          <div className="bg-white border border-slate-200 p-3 rounded-xl mb-3 flex items-center gap-2 shadow-sm">
+            <Key className="w-4 h-4 text-indigo-600 shrink-0" />
             <input
               type="text"
               placeholder="Session Code (e.g. SESSION-1)"
               value={manualCode}
               onChange={(e) => setManualCode(e.target.value)}
-              className="bg-transparent text-xs text-white focus:outline-none flex-1 font-mono"
+              className="bg-transparent text-xs text-slate-900 focus:outline-none flex-1 font-mono font-medium"
             />
             <button
               onClick={() => { if (manualCode && onJoinSession) onJoinSession(manualCode); }}
@@ -96,13 +95,13 @@ export default function MobileView({
 
         {/* Question Banner */}
         {question ? (
-          <div className="bg-zinc-900 border border-indigo-500/30 rounded-xl p-3 mb-4">
-            <div className="text-[10px] uppercase font-bold text-indigo-400 mb-0.5">Interviewer Question</div>
-            <div className="text-sm font-semibold text-zinc-100 line-clamp-2">"{question}"</div>
+          <div className="bg-white border border-indigo-200 rounded-xl p-3 mb-4 shadow-sm">
+            <div className="text-[10px] uppercase font-bold text-indigo-600 mb-0.5 tracking-wider">Interviewer Question</div>
+            <div className="text-sm font-semibold text-slate-900 line-clamp-2">"{question}"</div>
           </div>
         ) : (
-          <div className="bg-zinc-900/50 border border-zinc-800/50 rounded-xl p-3 mb-4 text-center">
-            <div className="text-xs text-zinc-500 italic">Listening for live interviewer question...</div>
+          <div className="bg-slate-100/60 border border-slate-200/80 rounded-xl p-3 mb-4 text-center">
+            <div className="text-xs text-slate-500 italic">Listening for live interviewer question...</div>
           </div>
         )}
       </div>
@@ -110,10 +109,10 @@ export default function MobileView({
       {/* Main Streaming Answer Container */}
       <div className="flex-1 overflow-y-auto space-y-4 my-2">
         {aiStatus === 'generating' && !aiAnswer && (
-          <div className="p-8 text-center clean-card animate-pulse">
-            <Zap className="w-8 h-8 text-indigo-400 mx-auto mb-2 animate-bounce" />
-            <div className="text-base font-bold text-white">Generating Answer Stream...</div>
-            <div className="text-xs text-zinc-400 font-mono">Sub-second response arriving...</div>
+          <div className="p-8 text-center clean-card animate-pulse shadow-sm">
+            <Zap className="w-8 h-8 text-indigo-600 mx-auto mb-2 animate-bounce" />
+            <div className="text-base font-bold text-slate-900">Generating Answer Stream...</div>
+            <div className="text-xs text-slate-500 font-mono mt-1">Sub-second response arriving...</div>
           </div>
         )}
 
@@ -121,7 +120,7 @@ export default function MobileView({
           <div className="space-y-4">
             {/* Direct Answer (Huge Font for 1-Second Scanning) */}
             {parsed.direct && (
-              <div className="mobile-answer-direct clean-card p-5 border-indigo-500/40">
+              <div className="mobile-answer-direct clean-card p-5 rounded-2xl">
                 {parsed.direct}
               </div>
             )}
@@ -129,10 +128,10 @@ export default function MobileView({
             {/* Key Bullet Points */}
             {parsed.bullets.length > 0 && (
               <div className="clean-card p-4 space-y-2">
-                <div className="text-xs font-bold uppercase text-zinc-400 mb-2">Key Points</div>
+                <div className="text-xs font-bold uppercase text-slate-500 tracking-wider mb-2">Key Points</div>
                 {parsed.bullets.map((b, i) => (
                   <div key={i} className="mobile-answer-bullet flex items-start gap-2">
-                    <span className="text-indigo-400 font-bold shrink-0">•</span>
+                    <span className="text-indigo-600 font-bold shrink-0">•</span>
                     <span>{b}</span>
                   </div>
                 ))}
@@ -142,27 +141,27 @@ export default function MobileView({
             {/* Real Example Box */}
             {parsed.example && (
               <div className="mobile-answer-example font-mono">
-                <div className="text-[11px] font-bold text-indigo-400 mb-1">Past Project Example</div>
+                <div className="text-[11px] font-bold text-indigo-700 mb-1 uppercase tracking-wider">Past Project Example</div>
                 {parsed.example}
               </div>
             )}
           </div>
         ) : (
           aiStatus !== 'generating' && (
-            <div className="h-56 flex flex-col items-center justify-center text-center p-6 border border-dashed border-zinc-800 rounded-2xl">
-              <Zap className="w-8 h-8 text-zinc-600 mb-2" />
-              <div className="text-sm font-semibold text-zinc-400">Ready for Live Answer</div>
-              <div className="text-xs text-zinc-500 mt-1">Tap "Answer Now" below or speak into laptop</div>
+            <div className="h-56 flex flex-col items-center justify-center text-center p-6 border-2 border-dashed border-slate-200 rounded-2xl">
+              <Zap className="w-8 h-8 text-slate-400 mb-2" />
+              <div className="text-sm font-semibold text-slate-600">Ready for Live Answer</div>
+              <div className="text-xs text-slate-400 mt-1">Tap "Answer Now" below or speak into laptop</div>
             </div>
           )
         )}
       </div>
 
       {/* Touch Action Buttons */}
-      <div className="pt-3 border-t border-zinc-800 grid grid-cols-4 gap-2">
+      <div className="pt-3 border-t border-slate-200 grid grid-cols-4 gap-2">
         <button
           onClick={() => onTriggerAnswer(question)}
-          className="btn-primary py-3 flex-col text-[11px] gap-1 rounded-xl"
+          className="btn-primary py-3 flex-col text-[11px] gap-1 rounded-xl shadow-md"
         >
           <Zap className="w-4 h-4 fill-current" />
           <span>Answer Now</span>
@@ -179,7 +178,7 @@ export default function MobileView({
         <button
           onClick={onTogglePause}
           className={`btn-secondary py-3 flex-col text-[11px] gap-1 rounded-xl ${
-            isPaused ? 'bg-amber-500/20 text-amber-300' : ''
+            isPaused ? 'bg-amber-100 text-amber-800 border-amber-300' : ''
           }`}
         >
           {isPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
