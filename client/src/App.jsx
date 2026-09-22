@@ -32,6 +32,8 @@ export default function App() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [committedTranscript, setCommittedTranscript] = useState('');
   const [manualTranscript, setManualTranscript] = useState('');
+  const [candidateInterim, setCandidateInterim] = useState('');
+  const [streamLimitation, setStreamLimitation] = useState(null);
 
   // ── Chat history: array of { id, role, text, status, ttft, totalTime, parentId, reqId } ──
   const [messages, setMessages] = useState([]);
@@ -179,6 +181,7 @@ export default function App() {
         break;
 
       // ── Transcript events ──
+      case 'interviewer_transcript_update':
       case 'transcript_update':
         if (data.isFinal) {
           setCommittedTranscript(p => p ? p + ' ' + data.transcript : data.transcript);
@@ -186,6 +189,33 @@ export default function App() {
         } else {
           setInterimTranscript(data.transcript);
         }
+        break;
+
+      case 'candidate_transcript_update':
+        if (data.isFinal) {
+          setCandidateInterim('');
+        } else {
+          setCandidateInterim(data.transcript);
+        }
+        break;
+
+      case 'candidate_speech_final':
+        setCandidateInterim('');
+        upsertMessage({
+          id: data.msgId,
+          role: 'candidate',
+          text: data.text,
+          uncertainWords: data.uncertainWords || [],
+          isEchoLeakage: Boolean(data.isEchoLeakage),
+          isProvisional: Boolean(data.isProvisional),
+          status: 'complete',
+          createdAt: data.createdAt || Date.now()
+        });
+        break;
+
+      case 'stream_limitation':
+        setStreamLimitation(data.message);
+        setTimeout(() => setStreamLimitation(null), 12000);
         break;
 
       // ── Question committed by server ──
@@ -327,11 +357,27 @@ export default function App() {
   // ─────────────────────────────────────────────────────────────
   //  Actions
   // ─────────────────────────────────────────────────────────────
-  const handleAudioChunk = useCallback((blob) => {
+  const handleAudioChunk = useCallback((chunk, source) => {
     if (wsRef.current?.readyState === WebSocket.OPEN && !isPaused) {
-      wsRef.current.send(blob);
+      if (chunk instanceof Uint8Array) {
+        wsRef.current.send(chunk);
+      } else if (chunk instanceof Blob) {
+        chunk.arrayBuffer().then(buf => {
+          const framed = new Uint8Array(buf.byteLength + 1);
+          framed[0] = source === 'candidate' ? 2 : (source === 'mobile' || isMobileMode ? 3 : 1);
+          framed.set(new Uint8Array(buf), 1);
+          wsRef.current?.send(framed);
+        }).catch(() => {});
+      }
     }
-  }, [isPaused]);
+  }, [isPaused, isMobileMode]);
+
+  const handleHelpContinue = useCallback((parentQuestionId) => {
+    wsRef.current?.send(JSON.stringify({
+      type: 'help_continue',
+      parentQuestionId
+    }));
+  }, []);
 
   const handleTranscriptUpdate = useCallback((text, isFinal) => {
     if (isPaused) return;
@@ -418,9 +464,11 @@ export default function App() {
         messages={messages}
         isPaused={isPaused}
         displayTranscript={displayTranscript}
+        candidateInterim={candidateInterim}
         onAudioChunk={handleAudioChunk}
         onTriggerAnswer={triggerAnswer}
         onExplainMore={() => handleExplainMore(latestAnswer?.id)}
+        onHelpContinue={handleHelpContinue}
         onClear={() => wsRef.current?.send(JSON.stringify({ type: 'clear_history' }))}
         onTogglePause={handleTogglePause}
         onJoinSession={handleJoinSession}
@@ -521,6 +569,12 @@ export default function App() {
           </div>
         )}
 
+        {streamLimitation && (
+          <div className="alert alert-amber" style={{ margin: '8px 20px', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 8, background: '#fffbeb', border: '1px solid #fef3c7', color: '#92400e', padding: '8px 14px' }}>
+            <span>⚠️ {streamLimitation}</span>
+          </div>
+        )}
+
         {/* Content */}
         {activeNav === 'dashboard' ? (
           <div className="content-area" style={{ gridTemplateRows: 'auto 1fr', height: 'calc(100vh - 60px)' }}>
@@ -541,6 +595,11 @@ export default function App() {
                     Interviewer Question
                     {interimTranscript && (
                       <span className="badge badge-blue" style={{ fontSize: 10, marginLeft: 4 }}>live...</span>
+                    )}
+                    {candidateInterim && (
+                      <span className="badge badge-green" style={{ fontSize: 10, marginLeft: 4, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                        candidate speaking...
+                      </span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
@@ -598,6 +657,7 @@ export default function App() {
                     onContinue={handleContinue}
                     onExplainMore={handleExplainMore}
                     onEditQuestion={handleEditQuestion}
+                    onHelpContinue={handleHelpContinue}
                   />
                 </div>
               </div>

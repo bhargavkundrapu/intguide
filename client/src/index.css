@@ -1061,6 +1061,33 @@ body {
   min-height: 40px;
 }
 
+/* Candidate bubble (Candidate's actual spoken speech) */
+.chat-bubble-candidate {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  border-left: 3px solid #10b981;
+  padding: 10px 14px;
+  min-height: 38px;
+}
+
+.chat-bubble-candidate .candidate-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: #14532d;
+  line-height: 1.5;
+}
+
+/* Mobile Candidate Card */
+.mobile-chat-candidate {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-left: 3px solid #10b981;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
 .chat-msg-footer {
   display: flex;
   align-items: center;
