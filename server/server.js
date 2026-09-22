@@ -86,9 +86,20 @@ function getOrCreateSession(sessionId) {
 //  TranscriptAccumulator
 //  Collects Deepgram fragments → commits complete questions
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
 const INCOMPLETE_PHRASES = [
-  /\band\s*$/i, /\bor\s*$/i, /\bfor example\s*$/i,
-  /\bthere are\s+\w+\s+conditions?$/i, /\bassuming\s*$/i, /\bsuch as\s*$/i,
+  // Trailing prepositions & particles (demand a noun/target object)
+  /\b(for|to|of|in|about|with|between|by|from|like|into|on|as|at|towards|upon|within)\s*$/i,
+  // Trailing conjunctions & clause connectors
+  /\b(and|or|but|because|if|when|while|where|so|than|whereas|whether|although|though|unless)\s*$/i,
+  // Trailing articles & determiners
+  /\b(a|an|the|this|that|these|those|my|your|our|their|his|her|its)\s*$/i,
+  // Trailing auxiliary/linking verbs
+  /\b(is|are|was|were|be|being|been|does|do|did|can|could|should|would|will|shall|might|must|have|has|had)\s*$/i,
+  // Common unfinished interview directive openings
+  /\b(write a code for|write code for|write a program for|how to implement|implement a|create a|explain how to|can you explain|difference between|what is the)\s*$/i,
+  // Common multi-word connectors
+  /\bfor example\s*$/i, /\bsuch as\s*$/i, /\bthere are\s+\w+\s+conditions?$/i, /\bassuming\s*$/i,
   /\bincluding\s*$/i, /\bfor\s+each\s*$/i
 ];
 
@@ -100,11 +111,14 @@ class TranscriptAccumulator {
     this.committed = '';      // stable committed text
     this.interim = '';        // current interim (not yet final)
     this.settleTimer = null;
+    this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle after 1.4s of quiet
+    this.WINDOW_MS = 5000;    // 5-second question accumulation window
   }
 
   isIncomplete(text) {
     const t = text.trim();
+    if (!t) return true;
     return INCOMPLETE_PHRASES.some(re => re.test(t));
   }
 
@@ -113,6 +127,7 @@ class TranscriptAccumulator {
   }
 
   addInterim(text) {
+    if (!this.speechStartTime) this.speechStartTime = Date.now();
     this.interim = text;
     // Debounce settle timer while speaker is active
     this._scheduleSettle(this.SETTLE_MS);
@@ -120,6 +135,7 @@ class TranscriptAccumulator {
 
   addFinal(text, speechFinal) {
     if (this.isNoiseOnly(text)) return null;
+    if (!this.speechStartTime) this.speechStartTime = Date.now();
 
     // Append to committed buffer
     this.committed = this.committed
@@ -127,14 +143,17 @@ class TranscriptAccumulator {
       : text.trim();
     this.interim = '';
 
+    const elapsed = Date.now() - this.speechStartTime;
+
     if (speechFinal) {
-      // Deepgram confirmed end-of-utterance via VAD
-      if (!this.isIncomplete(this.committed)) {
-        this._clearSettle();
-        return this._commit();
+      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to 5s window
+      if (this.isIncomplete(this.committed)) {
+        const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
+        this._scheduleSettle(remaining);
+        return null;
       }
-      // If trailing word is an incomplete phrase (and, or, for example), wait short extra window
-      this._scheduleSettle(700);
+      this._clearSettle();
+      return this._commit();
     } else {
       // is_final received but not end of utterance yet -> debounce settle
       this._scheduleSettle(this.SETTLE_MS);
@@ -152,6 +171,7 @@ class TranscriptAccumulator {
     const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
     this.committed = '';
     this.interim = '';
+    this.speechStartTime = null;
     if (!full || this.isNoiseOnly(full)) return null;
     return full;
   }
@@ -160,8 +180,20 @@ class TranscriptAccumulator {
     this._clearSettle();
     this.settleTimer = setTimeout(() => {
       const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
+
+      // If trailing word is a preposition/connector and within the 5s speech window, wait longer!
+      if (this.isIncomplete(full)) {
+        const elapsed = this.speechStartTime ? Date.now() - this.speechStartTime : 0;
+        if (elapsed < this.WINDOW_MS) {
+          this._scheduleSettle(1200);
+          return;
+        }
+      }
+
       this.committed = '';
       this.interim = '';
+      this.speechStartTime = null;
+
       if (full && !this.isNoiseOnly(full)) {
         const session = sessions.get(this.sessionId);
         if (session) commitQuestion(this.sessionId, full, session);
@@ -294,8 +326,51 @@ function notifyPeerStatus(sessionId) {
 //  Commit a question → start answer generation
 // ─────────────────────────────────────────────────────────────
 function commitQuestion(sessionId, questionText, session) {
+  const trimmed = questionText.trim();
+  if (!trimmed) return;
+
+  // ── 5-Second Stitching & Follow-up Completion Rule ──
+  // If a question was committed within the last 5 seconds, and:
+  // (a) the previous question was incomplete (e.g. ended with "for", "to", "in")
+  // (b) OR the new text is a short completion fragment (<= 4 words, e.g. "palindrome", "in python")
+  // stitch them together instead of creating two fragmented answers!
+  const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
+  const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
+  const wordCount = trimmed.split(/\s+/).length;
+
+  const wasIncomplete = lastQ && INCOMPLETE_PHRASES.some(re => re.test(lastQ.text));
+  const isShortFragment = wordCount <= 4 && !/^(what|why|how|explain|can you|write|implement)\b/i.test(trimmed);
+
+  if (lastQ && timeSinceLastQ < 5000 && (wasIncomplete || isShortFragment)) {
+    // Abort previous partial answer
+    if (session.activeAbort) {
+      session.activeAbort.abort();
+      session.activeAbort = null;
+    }
+
+    // Clean up any in-progress or interrupted answer for that premature question
+    session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
+
+    // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
+    lastQ.text = `${lastQ.text.trim()} ${trimmed}`;
+    lastQ.createdAt = Date.now();
+    session.pendingQuestionHash = hashText(lastQ.text);
+
+    // Broadcast updated question so UI updates single bubble
+    broadcastToSession(sessionId, {
+      type: 'question_updated',
+      msgId: lastQ.id,
+      text: lastQ.text,
+      sessionId
+    });
+
+    // Stream the new unified answer
+    streamAiAnswer(sessionId, lastQ.text, lastQ.id, session);
+    return;
+  }
+
   // Deduplicate by question hash
-  const qHash = hashText(questionText);
+  const qHash = hashText(trimmed);
   if (session.pendingQuestionHash === qHash) return; // same question already committed
   session.pendingQuestionHash = qHash;
 
@@ -303,7 +378,7 @@ function commitQuestion(sessionId, questionText, session) {
   const qMsg = {
     id: qMsgId,
     role: 'question',
-    text: questionText,
+    text: trimmed,
     status: 'complete',
     parentId: null,
     reqId: null,
@@ -316,7 +391,7 @@ function commitQuestion(sessionId, questionText, session) {
   broadcastToSession(sessionId, {
     type: 'question_committed',
     msgId: qMsgId,
-    text: questionText,
+    text: trimmed,
     sessionId
   });
 
@@ -335,7 +410,7 @@ function commitQuestion(sessionId, questionText, session) {
     }
   }
 
-  streamAiAnswer(sessionId, questionText, qMsgId, session);
+  streamAiAnswer(sessionId, trimmed, qMsgId, session);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -740,11 +815,11 @@ wss.on('connection', (ws) => {
             }
           }
 
-          // VAD silence event
+          // VAD silence event — only commit if sentence is grammatically complete!
           if (type === 'UtteranceEnd') {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
-            if (full) {
+            if (full && !acc.isIncomplete(full)) {
               const committed = acc.forceCommit();
               if (committed) commitQuestion(sessionId, committed, session);
             }

@@ -206,6 +206,14 @@ export default function App() {
         });
         break;
 
+      case 'question_updated':
+        setMessages(prev =>
+          prev
+            .map(m => (m.id === data.msgId ? { ...m, text: data.text } : m))
+            .filter(m => !(m.role === 'answer' && m.parentId === data.msgId && m.status !== 'complete'))
+        );
+        break;
+
       // ── Answer streaming events ──
       case 'chat_message':
         // New answer message created
