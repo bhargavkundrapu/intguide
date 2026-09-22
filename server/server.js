@@ -148,7 +148,7 @@ class TranscriptAccumulator {
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle after 1.4s of quiet
-    this.WINDOW_MS = 7000;    // 7-second question accumulation window
+    this.WINDOW_MS = 15000;   // 15-second question accumulation window
   }
 
   isIncomplete(text) {
@@ -378,8 +378,8 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
 
-  // ── 7-Second Stitching & Follow-up Completion Rule ──
-  // If a question was committed within the last 7 seconds, and:
+  // ── 15-Second Stitching & Follow-up Completion Rule ──
+  // If a question was committed within the last 15 seconds, and:
   // (a) the previous question was incomplete (e.g. ended with "for", "to", "in")
   // (b) OR the new text is a short completion fragment (<= 4 words, e.g. "palindrome", "in python")
   // stitch them together instead of creating two fragmented answers!
@@ -390,7 +390,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const wasIncomplete = lastQ && INCOMPLETE_PHRASES.some(re => re.test(lastQ.text));
   const isShortFragment = wordCount <= 4 && !/^(what|why|how|explain|can you|write|implement)\b/i.test(trimmed);
 
-  if (lastQ && timeSinceLastQ < 7000 && (wasIncomplete || isShortFragment)) {
+  if (lastQ && timeSinceLastQ < 15000 && (wasIncomplete || isShortFragment)) {
     // Abort previous partial answer
     if (session.activeAbort) {
       session.activeAbort.abort();
