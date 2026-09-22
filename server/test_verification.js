@@ -84,8 +84,8 @@ async function runTests() {
 
   await new Promise(r => setTimeout(r, 600));
 
-  // Step 2b: Within 5 seconds, simulate continuation fragment: "palindrome"
-  console.log('  Simulating follow-up continuation: "palindrome" within 5 seconds...');
+  // Step 2b: Within 7 seconds, simulate continuation fragment: "palindrome"
+  console.log('  Simulating follow-up continuation: "palindrome" within 7 seconds...');
   ws.send(JSON.stringify({
     type: 'trigger_answer',
     question: 'palindrome'
