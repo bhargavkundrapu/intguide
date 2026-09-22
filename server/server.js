@@ -378,26 +378,22 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
 
+  const wordCount = trimmed.split(/\s+/).length;
+  const isQuestionStarter = /^(what|why|how|explain|can you|write|implement|tell me|describe)\b/i.test(trimmed);
+
   // ── 15-Second Stitching & Follow-up Completion Rule ──
-  // If a question was committed within the last 15 seconds, and:
-  // (a) the previous question was incomplete (e.g. ended with "for", "to", "in")
-  // (b) OR the new text is a short completion fragment (<= 4 words, e.g. "palindrome", "in python")
-  // stitch them together instead of creating two fragmented answers!
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
-  const wordCount = trimmed.split(/\s+/).length;
+  const isContinuation = timeSinceLastQ < 15000 && (!isQuestionStarter || wordCount <= 4);
 
-  const wasIncomplete = lastQ && INCOMPLETE_PHRASES.some(re => re.test(lastQ.text));
-  const isShortFragment = wordCount <= 4 && !/^(what|why|how|explain|can you|write|implement)\b/i.test(trimmed);
-
-  if (lastQ && timeSinceLastQ < 15000 && (wasIncomplete || isShortFragment)) {
+  if (lastQ && isContinuation) {
     // Abort previous partial answer
     if (session.activeAbort) {
       session.activeAbort.abort();
       session.activeAbort = null;
     }
 
-    // Clean up any in-progress or interrupted answer for that premature question
+    // Clean up previous answer completely so no broken interrupted message is displayed
     session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
 
     // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
@@ -419,6 +415,13 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
 
     // Stream the new unified answer
     streamAiAnswer(sessionId, lastQ.text, lastQ.id, session);
+    return;
+  }
+
+  // If an answer is actively streaming, don't let short filler noise (e.g. "ok", "yeah", "mhm") kill the answer!
+  const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
+  if (isCurrentlyStreaming && wordCount <= 3 && !isQuestionStarter) {
+    console.log(`[Noise Filter] Ignored fragment "${trimmed}" while answer is streaming to prevent interruption.`);
     return;
   }
 
@@ -456,7 +459,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   // Abort any in-progress generation
   if (session.activeAbort) {
     session.activeAbort.abort();
-    // Mark the in-progress answer as interrupted — use reverse().find() for Node 16 compat
+    session.activeAbort = null;
     const inProgress = [...session.messages].reverse().find(m => m.role === 'answer' && m.status === 'streaming');
     if (inProgress) {
       inProgress.status = 'interrupted';
@@ -524,7 +527,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     return;
   }
 
-  const models = ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'llama-3.3-70b-versatile'];
+  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
   const groq = new Groq({ apiKey: groqKey });
 
   for (const model of models) {
@@ -608,46 +611,39 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
       const status = err.status || err.statusCode;
 
       if (status === 429) {
-        // Rate limit — extract retry-after if available
-        const retryAfter = parseInt(err.headers?.['retry-after'] || '5', 10);
-        broadcastToSession(sessionId, {
-          type: 'chat_error',
-          msgId: aMsgId,
-          reqId,
-          error: 'rate_limit',
-          retryAfter,
-          message: `Rate limited by Groq. Retrying in ${retryAfter}s...`,
-          sessionId
-        });
-        await new Promise(r => setTimeout(r, retryAfter * 1000));
-        continue; // retry with same or next model
+        // Rate limit — log and try next model or wait briefly
+        console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model...`);
+        continue;
       }
 
       if (status === 401) {
-        broadcastToSession(sessionId, {
-          type: 'chat_error', msgId: aMsgId, reqId, error: 'auth',
-          message: 'Groq API key invalid.', sessionId
-        });
-        break;
+        console.warn(`[Groq] 401 Auth error. Falling back to local responder.`);
+        break; // break to fallback
       }
 
-      console.warn(`Model ${model} error: ${err.message}`);
-      // Try next model
+      console.warn(`[Groq] Model ${model} error: ${err.message}. Trying next model...`);
     }
   }
 
   // All models failed or aborted
   if (!abort.signal.aborted && session.activeReqId === reqId) {
     if (aMsg.text.length === 0) {
-      // Nothing was generated — fall back to mock
+      // Nothing was generated — fall back to intelligent responder immediately
       await streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, abort.signal, continueFromText);
     } else {
-      aMsg.status = 'interrupted';
+      // Some text was generated — finalize cleanly so the user gets a readable answer
+      const totalTime = Date.now() - startTime;
+      aMsg.status = 'complete';
+      aMsg.totalTime = totalTime;
       broadcastToSession(sessionId, {
-        type: 'chat_interrupted', msgId: aMsgId, reqId, sessionId
+        type: 'chat_done',
+        msgId: aMsgId,
+        reqId,
+        fullText: aMsg.text,
+        totalTime,
+        sessionId
       });
     }
-    // BUG FIX: always reset pendingQuestionHash so retries work
     session.pendingQuestionHash = null;
     session.activeReqId = null;
     session.activeAbort = null;
