@@ -18,15 +18,15 @@ export default function MobileView({
 }) {
   const [manualCode, setManualCode] = useState('');
 
-  // Parse structured AI answer
+  // Robust answer parser supporting all LLM markdown header variants
   const parseAnswer = (text) => {
     if (!text) return { direct: '', bullets: [], example: '' };
 
-    const directMatch = text.match(/🎯 \*\*Direct Answer:\*\*\s*([\s\S]*?)(?=\n\n💡|\n\n🚀|$)/i);
-    const keyPointsMatch = text.match(/💡 \*\*Key Points:\*\*\s*([\s\S]*?)(?=\n\n🚀|$)/i);
-    const exampleMatch = text.match(/🚀 \*\*Real Example:\*\*\s*([\s\S]*?)$/i);
+    const directMatch = text.match(/(?:🎯\s*)?(?:\*\*)?(?:Direct Answer:?|Answer:?)(?:\*\*)?\s*([\s\S]*?)(?=\n\n(?:💡|🚀|\*\*Key Points|\*\*Real Example|#)|$)/i);
+    const keyPointsMatch = text.match(/(?:💡\s*)?(?:\*\*)?(?:Key Points:?|Key Highlights:?)(?:\*\*)?\s*([\s\S]*?)(?=\n\n(?:🚀|\*\*Real Example|#)|$)/i);
+    const exampleMatch = text.match(/(?:🚀\s*)?(?:\*\*)?(?:Real Example:?|Past Project Example:?)(?:\*\*)?\s*([\s\S]*?)$/i);
 
-    const direct = directMatch ? directMatch[1].trim() : '';
+    let direct = directMatch ? directMatch[1].trim() : '';
     let bullets = [];
     if (keyPointsMatch) {
       bullets = keyPointsMatch[1]
@@ -34,10 +34,11 @@ export default function MobileView({
         .map(b => b.replace(/^[-*•]\s*/, '').trim())
         .filter(Boolean);
     }
-    const example = exampleMatch ? exampleMatch[1].trim() : '';
+    let example = exampleMatch ? exampleMatch[1].trim() : '';
 
+    // Fallback: If structured headers fail, display full stream directly
     if (!direct && !bullets.length && !example) {
-      return { direct: text, bullets: [], example: '' };
+      direct = text.trim();
     }
 
     return { direct, bullets, example };
@@ -47,7 +48,7 @@ export default function MobileView({
 
   return (
     <div className="mobile-clean-container">
-      {/* Top Mobile Bar */}
+      {/* Header Bar */}
       <div>
         <div className="flex items-center justify-between pb-3 border-b border-zinc-800 mb-3">
           <div className="flex items-center gap-2">
@@ -73,13 +74,13 @@ export default function MobileView({
           </div>
         </div>
 
-        {/* Manual Session Pairing Input if disconnected */}
+        {/* Manual Pairing Input */}
         {!wsConnected && (
           <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-xl mb-3 flex items-center gap-2">
             <Key className="w-4 h-4 text-indigo-400 shrink-0" />
             <input
               type="text"
-              placeholder="Enter Session Code (e.g. SESSION-1)"
+              placeholder="Session Code (e.g. SESSION-1)"
               value={manualCode}
               onChange={(e) => setManualCode(e.target.value)}
               className="bg-transparent text-xs text-white focus:outline-none flex-1 font-mono"
@@ -106,13 +107,13 @@ export default function MobileView({
         )}
       </div>
 
-      {/* Main Streaming Answer Display */}
+      {/* Main Streaming Answer Container */}
       <div className="flex-1 overflow-y-auto space-y-4 my-2">
         {aiStatus === 'generating' && !aiAnswer && (
           <div className="p-8 text-center clean-card animate-pulse">
             <Zap className="w-8 h-8 text-indigo-400 mx-auto mb-2 animate-bounce" />
-            <div className="text-base font-bold text-white">Generating Answer...</div>
-            <div className="text-xs text-zinc-400 font-mono">Stream starting in ms...</div>
+            <div className="text-base font-bold text-white">Generating Answer Stream...</div>
+            <div className="text-xs text-zinc-400 font-mono">Sub-second response arriving...</div>
           </div>
         )}
 
@@ -157,7 +158,7 @@ export default function MobileView({
         )}
       </div>
 
-      {/* Bottom Control Bar (Touch Targets) */}
+      {/* Touch Action Buttons */}
       <div className="pt-3 border-t border-zinc-800 grid grid-cols-4 gap-2">
         <button
           onClick={() => onTriggerAnswer(question)}

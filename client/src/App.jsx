@@ -71,13 +71,42 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Dynamic WebSocket URL calculation (supports local dev, production single-port, and deployed cloud services like Render/Railway/ngrok)
+  const getWsUrl = () => {
+    const isHttps = window.location.protocol === 'https:';
+    const wsProtocol = isHttps ? 'wss:' : 'ws:';
+    
+    // In local Vite dev mode on port 3000, connect to backend port 5000
+    if (window.location.port === '3000') {
+      return `${wsProtocol}//${window.location.hostname}:5000`;
+    }
+    
+    // In production or deployed cloud (Render, Railway, ngrok, Vercel):
+    // Use window.location.host (includes host + port if custom, or omits port if standard 80/443)
+    return `${wsProtocol}//${window.location.host}`;
+  };
+
+  // Dynamic QR Code Pairing URL calculation
+  const getPairingUrl = () => {
+    const currentOrigin = window.location.origin;
+
+    // If opened via localhost on Vite (port 3000):
+    // Rewrite hostname to local network IP so phone on Wi-Fi can connect
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      if (serverInfo.localIp && serverInfo.localIp !== 'localhost') {
+        const port = window.location.port || '5000';
+        return `http://${serverInfo.localIp}:${port}/?mode=mobile&session=${sessionId}`;
+      }
+    }
+
+    // For deployed public apps (Render, Railway, Vercel, ngrok):
+    // Use actual browser origin so QR code contains public https URL scannable anywhere in the world!
+    return `${currentOrigin}/?mode=mobile&session=${sessionId}`;
+  };
+
   // WebSocket Connection Lifecycle
   useEffect(() => {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsHost = window.location.hostname;
-    const wsPort = 5000;
-    const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}`;
-
+    const wsUrl = getWsUrl();
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -91,7 +120,6 @@ export default function App() {
         })
       );
 
-      // Trigger Deepgram Flux v2 live connection on server if laptop mode
       if (!isMobileMode) {
         ws.send(JSON.stringify({ type: 'start_deepgram_flux' }));
       }
@@ -257,8 +285,7 @@ export default function App() {
     setSessionId(newSessionCode);
   };
 
-  // QR Mobile Link pointing directly to Express port 5000
-  const pairingUrl = `http://${serverInfo.localIp}:${serverInfo.port}/?mode=mobile&session=${sessionId}`;
+  const pairingUrl = getPairingUrl();
 
   if (isMobileMode) {
     return (
@@ -293,10 +320,10 @@ export default function App() {
               <h1 className="font-heading text-lg font-bold text-white tracking-tight">
                 AI INTERVIEW COPILOT
               </h1>
-              <span className="pill-badge pill-badge-green">DEEPGRAM FLUX v2</span>
+              <span className="pill-badge pill-badge-green">LIVE COPILOT</span>
             </div>
             <p className="text-xs text-zinc-400">
-              Live Sub-Second Speech-to-Answer • Groq Llama 3.3 70B • Dual Screen Sync
+              Live Sub-Second Speech-to-Answer • Groq Llama 3 • Dual Screen Sync
             </p>
           </div>
         </div>
@@ -415,7 +442,7 @@ export default function App() {
                   <div className="p-8 text-center clean-card my-8">
                     <Zap className="w-8 h-8 text-indigo-400 animate-bounce mx-auto mb-2" />
                     <div className="text-sm font-bold text-white">Generating Low-Latency Answer...</div>
-                    <div className="text-xs text-zinc-400 font-mono mt-1">Groq Llama 3.3 streaming...</div>
+                    <div className="text-xs text-zinc-400 font-mono mt-1">Groq streaming response...</div>
                   </div>
                 )}
 

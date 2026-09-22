@@ -30,7 +30,6 @@ const candidateContext = {
   guardrails: "Strictly adhere to candidate's actual experience. If a question asks about something missing from context, provide the standard industry best-practice answer and note candidate familiarity. Never invent fake past metrics."
 };
 
-// Discover local network IPv4 address for QR mobile connection
 function getLocalIpAddress() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -69,17 +68,16 @@ app.post('/api/context', (req, res) => {
   res.json({ success: true, context: candidateContext });
 });
 
-// Serve frontend static files from client/dist if available
+// Serve frontend static build
 const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api')) return res.status(404).json({ error: 'Not found' });
   res.sendFile(path.join(clientDistPath, 'index.html'), (err) => {
-    if (err) res.send('AI Copilot Server Running. Client build pending.');
+    if (err) res.send('AI Copilot Server Running.');
   });
 });
 
-// System prompt builder
 function buildSystemPrompt(userContext, customInstruction = "") {
   return `You are a real-time ultra-fast Interview Copilot assisting a candidate during a live interview.
 Your answers MUST be concise, authoritative, accurate, and direct. The candidate needs to read the main answer in 1-2 seconds.
@@ -100,11 +98,11 @@ Format your response cleanly in markdown with EXACTLY 3 sections:
    - Point 3 (1-2 sentences on practical benefit or architecture)
 3. **Real Example**: 1 concise real-world or past project example (2 sentences max).
 
-DO NOT add conversational filler like "Sure!", "Great question!", or "Here is the answer:". Start IMMEDIATELY with the Direct Answer.
+Start IMMEDIATELY with the Direct Answer without conversational filler.
 ${customInstruction ? `\nSPECIAL INSTRUCTION: ${customInstruction}` : ''}`;
 }
 
-// Low-latency Fallback Generator for zero-key/offline demo mode
+// Low-latency Fallback Streamer
 async function streamMockAnswer(question, sessionId, startTime, instruction = "") {
   const qLower = question.toLowerCase();
   
@@ -171,42 +169,45 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
   const openAIKey = process.env.OPENAI_API_KEY;
 
   if (groqKey) {
-    try {
-      const groq = new Groq({ apiKey: groqKey });
-      const systemPrompt = buildSystemPrompt(candidateContext, customInstruction);
-      
-      const stream = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `INTERVIEW QUESTION: "${question}"` }
-        ],
-        model: 'llama-3.3-70b-versatile',
-        temperature: 0.2,
-        max_tokens: 350,
-        stream: true
-      });
+    const groqModels = ['llama-3.1-70b-versatile', 'llama3-70b-8192', 'llama3-8b-8192', 'mixtral-8x7b-32768'];
+    const groq = new Groq({ apiKey: groqKey });
+    const systemPrompt = buildSystemPrompt(candidateContext, customInstruction);
 
-      let firstTokenSent = false;
-      let accumulated = '';
+    for (const model of groqModels) {
+      try {
+        const stream = await groq.chat.completions.create({
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `INTERVIEW QUESTION: "${question}"` }
+          ],
+          model: model,
+          temperature: 0.2,
+          max_tokens: 350,
+          stream: true
+        });
 
-      for await (const chunk of stream) {
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (text) {
-          accumulated += text;
-          if (!firstTokenSent) {
-            firstTokenSent = true;
-            const ttft = Date.now() - startTime;
-            broadcastToSession(sessionId, { type: 'ai_stream_start', ttft });
+        let firstTokenSent = false;
+        let accumulated = '';
+
+        for await (const chunk of stream) {
+          const text = chunk.choices[0]?.delta?.content || '';
+          if (text) {
+            accumulated += text;
+            if (!firstTokenSent) {
+              firstTokenSent = true;
+              const ttft = Date.now() - startTime;
+              broadcastToSession(sessionId, { type: 'ai_stream_start', ttft });
+            }
+            broadcastToSession(sessionId, { type: 'ai_stream_chunk', chunk: text, fullText: accumulated });
           }
-          broadcastToSession(sessionId, { type: 'ai_stream_chunk', chunk: text, fullText: accumulated });
         }
-      }
 
-      const totalTime = Date.now() - startTime;
-      broadcastToSession(sessionId, { type: 'ai_stream_end', fullText: accumulated, totalTime });
-      return;
-    } catch (err) {
-      console.error('Groq Streaming Error, falling back:', err.message);
+        const totalTime = Date.now() - startTime;
+        broadcastToSession(sessionId, { type: 'ai_stream_end', fullText: accumulated, totalTime });
+        return; // Success!
+      } catch (err) {
+        console.warn(`Groq Model ${model} error: ${err.message}. Trying next model...`);
+      }
     }
   }
 
@@ -250,34 +251,45 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
     }
   }
 
-  // Mock stream if no key or API call failed
+  // Fallback to mock streamer
   await streamMockAnswer(question, sessionId, startTime, customInstruction);
 }
 
-// Broadcast helper for session sockets
+// Broadcast helper for session sockets with universal fallback
 function broadcastToSession(sessionId, data) {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
   const payload = JSON.stringify(data);
-  if (session.laptopWs && session.laptopWs.readyState === WebSocket.OPEN) {
-    session.laptopWs.send(payload);
+  const session = sessions.get(sessionId);
+
+  if (session) {
+    if (session.laptopWs && session.laptopWs.readyState === WebSocket.OPEN) {
+      session.laptopWs.send(payload);
+    }
+    for (const mobileWs of session.mobileWss) {
+      if (mobileWs.readyState === WebSocket.OPEN) {
+        mobileWs.send(payload);
+      }
+    }
   }
-  for (const mobileWs of session.mobileWss) {
-    if (mobileWs.readyState === WebSocket.OPEN) {
-      mobileWs.send(payload);
+
+  // Universal fallback broadcast to all connected mobile clients
+  for (const [sId, sess] of sessions.entries()) {
+    if (sId !== sessionId) {
+      for (const mWs of sess.mobileWss) {
+        if (mWs.readyState === WebSocket.OPEN) {
+          mWs.send(payload);
+        }
+      }
     }
   }
 }
 
-// WebSocket Session & Audio Manager
+// WebSocket Connection Handler
 wss.on('connection', (ws) => {
   let currentSessionId = null;
   let userRole = null;
   let deepgramWs = null;
 
   ws.on('message', async (message, isBinary) => {
-    // If binary audio chunk from browser, forward to Deepgram Flux v2 live WebSocket
     if (isBinary) {
       if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
         deepgramWs.send(message);
@@ -311,10 +323,9 @@ wss.on('connection', (ws) => {
             mobileCount: session.mobileWss.size
           }));
 
-          // Notify session peers of mobile connection status
           broadcastToSession(currentSessionId, {
             type: 'peer_status',
-            mobileConnected: session.mobileWss.size > 0,
+            mobileConnected: true,
             mobileCount: session.mobileWss.size
           });
           break;
@@ -327,11 +338,10 @@ wss.on('connection', (ws) => {
             return;
           }
 
-          // Deepgram Flux v2 WebSocket streaming endpoint
-          const fluxUrl = 'wss://api.deepgram.com/v2/listen?eot_threshold=0.7&eot_timeout_ms=5000&model=flux-general-en&encoding=linear16&sample_rate=16000';
+          const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&utterance_end_ms=1000';
 
           try {
-            deepgramWs = new WebSocket(fluxUrl, {
+            deepgramWs = new WebSocket(dgUrl, {
               headers: { Authorization: `Token ${dgKey}` }
             });
 
@@ -341,49 +351,26 @@ wss.on('connection', (ws) => {
 
             deepgramWs.on('message', (dgMsg) => {
               try {
-                let jsonPayload = null;
-                const msgStr = dgMsg.toString();
-                
-                // Deepgram Flux v2 transmits base64 encoded text JSON payloads
-                try {
-                  const decoded = Buffer.from(msgStr, 'base64').toString('utf-8');
-                  jsonPayload = JSON.parse(decoded);
-                } catch (e1) {
-                  try {
-                    jsonPayload = JSON.parse(msgStr);
-                  } catch (e2) {}
-                }
+                const jsonPayload = JSON.parse(dgMsg.toString());
+                const transcript = jsonPayload.channel?.alternatives[0]?.transcript;
+                const isFinal = jsonPayload.is_final;
 
-                if (jsonPayload) {
-                  const event = jsonPayload.event;
-                  const transcript = jsonPayload.transcript;
-                  const eotConfidence = jsonPayload.end_of_turn_confidence;
+                if (transcript && transcript.trim().length > 0) {
+                  broadcastToSession(currentSessionId, {
+                    type: 'transcript_update',
+                    transcript: transcript,
+                    isFinal: isFinal
+                  });
 
-                  if (transcript) {
-                    broadcastToSession(currentSessionId, {
-                      type: 'transcript_update',
-                      transcript: transcript,
-                      isFinal: event === 'EndOfTurn'
-                    });
-                  }
-
-                  if (event === 'EndOfTurn' && transcript && transcript.trim().length > 10) {
-                    // Automatically trigger Groq LLM answer stream on EndOfTurn!
+                  if (isFinal && transcript.trim().length > 10) {
                     streamAiAnswer(transcript, currentSessionId);
                   }
                 }
-              } catch (err) {
-                console.error('Error parsing Deepgram Flux message:', err);
-              }
+              } catch (err) {}
             });
 
             deepgramWs.on('error', (err) => {
-              console.error('Deepgram Flux WS Error:', err.message);
               ws.send(JSON.stringify({ type: 'deepgram_error', message: err.message }));
-            });
-
-            deepgramWs.on('close', () => {
-              ws.send(JSON.stringify({ type: 'deepgram_status', status: 'closed' }));
             });
           } catch (e) {
             ws.send(JSON.stringify({ type: 'deepgram_error', message: e.message }));
@@ -405,7 +392,8 @@ wss.on('connection', (ws) => {
             transcript: data.transcript,
             isFinal: data.isFinal
           });
-          if (data.autoTrigger && data.transcript.trim().length > 5) {
+
+          if ((data.isFinal || data.autoTrigger) && data.transcript && data.transcript.trim().length > 5) {
             streamAiAnswer(data.transcript, currentSessionId);
           }
           break;
@@ -441,22 +429,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (deepgramWs) {
-      deepgramWs.close();
-    }
-    if (currentSessionId && sessions.has(currentSessionId)) {
-      const session = sessions.get(currentSessionId);
-      if (userRole === 'laptop' && session.laptopWs === ws) {
-        session.laptopWs = null;
-      } else if (userRole === 'mobile') {
-        session.mobileWss.delete(ws);
-      }
-      broadcastToSession(currentSessionId, {
-        type: 'peer_status',
-        mobileConnected: session.mobileWss.size > 0,
-        mobileCount: session.mobileWss.size
-      });
-    }
+    if (deepgramWs) deepgramWs.close();
   });
 });
 
