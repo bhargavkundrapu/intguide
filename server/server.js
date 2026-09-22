@@ -68,7 +68,7 @@ app.post('/api/context', (req, res) => {
   res.json({ success: true, context: candidateContext });
 });
 
-// Serve frontend static build
+// Serve static frontend build
 const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 app.get('*', (req, res) => {
@@ -102,7 +102,7 @@ Start IMMEDIATELY with the Direct Answer without conversational filler.
 ${customInstruction ? `\nSPECIAL INSTRUCTION: ${customInstruction}` : ''}`;
 }
 
-// Low-latency Fallback Streamer
+// Low-latency Fallback Streamer for zero-key mode
 async function streamMockAnswer(question, sessionId, startTime, instruction = "") {
   const qLower = question.toLowerCase();
   
@@ -169,7 +169,8 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
   const openAIKey = process.env.OPENAI_API_KEY;
 
   if (groqKey) {
-    const groqModels = ['llama-3.1-70b-versatile', 'llama3-70b-8192', 'llama3-8b-8192', 'mixtral-8x7b-32768'];
+    // Exact working model list verified against Groq API endpoint
+    const groqModels = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'allam-2-7b'];
     const groq = new Groq({ apiKey: groqKey });
     const systemPrompt = buildSystemPrompt(candidateContext, customInstruction);
 
@@ -255,11 +256,12 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
   await streamMockAnswer(question, sessionId, startTime, customInstruction);
 }
 
-// Broadcast helper for session sockets with universal fallback
+// Universal session broadcast helper
 function broadcastToSession(sessionId, data) {
   const payload = JSON.stringify(data);
   const session = sessions.get(sessionId);
 
+  // 1. Send to matched session
   if (session) {
     if (session.laptopWs && session.laptopWs.readyState === WebSocket.OPEN) {
       session.laptopWs.send(payload);
@@ -271,7 +273,7 @@ function broadcastToSession(sessionId, data) {
     }
   }
 
-  // Universal fallback broadcast to all connected mobile clients
+  // 2. Universal fallback: Send to ALL connected mobile clients
   for (const [sId, sess] of sessions.entries()) {
     if (sId !== sessionId) {
       for (const mWs of sess.mobileWss) {
@@ -283,7 +285,7 @@ function broadcastToSession(sessionId, data) {
   }
 }
 
-// WebSocket Connection Handler
+// WebSocket Connection Manager
 wss.on('connection', (ws) => {
   let currentSessionId = null;
   let userRole = null;
@@ -370,6 +372,7 @@ wss.on('connection', (ws) => {
             });
 
             deepgramWs.on('error', (err) => {
+              console.error('Deepgram WS Error:', err.message);
               ws.send(JSON.stringify({ type: 'deepgram_error', message: err.message }));
             });
           } catch (e) {
