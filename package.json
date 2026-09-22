@@ -1,0 +1,11 @@
+{
+  "name": "ai-interview-copilot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Real-time AI Interview Copilot with Deepgram, Groq, and Mobile HUD",
+  "scripts": {
+    "build": "npm --prefix client install && npm --prefix client run build && npm --prefix server install",
+    "start": "node server/server.js",
+    "install:all": "npm --prefix client install && npm --prefix server install"
+  }
+}

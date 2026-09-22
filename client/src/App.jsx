@@ -83,6 +83,14 @@ export default function App() {
   //  WebSocket connection
   // ─────────────────────────────────────────────────────────────
   const getWsUrl = () => {
+    if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL;
+    if (import.meta.env.VITE_BACKEND_URL) {
+      try {
+        const url = new URL(import.meta.env.VITE_BACKEND_URL);
+        const proto = url.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${proto}//${url.host}`;
+      } catch (e) {}
+    }
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     if (window.location.port === '3000') return `${proto}//${window.location.hostname}:5000`;
     return `${proto}//${window.location.host}`;
@@ -157,9 +165,11 @@ export default function App() {
 
       // ── Peer/session events ──
       case 'registered':
-        // Restore history from server on reconnect
         if (data.history?.length) {
           setMessages(data.history);
+        }
+        if (data.currentTranscript) {
+          setCommittedTranscript(data.currentTranscript);
         }
         break;
 
@@ -218,18 +228,45 @@ export default function App() {
         break;
 
       case 'chat_chunk':
-        // Reject chunks from a cancelled/stale request
-        if (data.reqId !== activeReqIdRef.current) break;
-        patchMessage(data.msgId, { text: data.fullText, status: 'streaming' });
+        // Accept chunk if matching current active request or if initializing first chunk
+        if (activeReqIdRef.current && data.reqId !== activeReqIdRef.current) break;
+        activeReqIdRef.current = data.reqId;
+        setMessages(prev => {
+          const idx = prev.findIndex(m => m.id === data.msgId);
+          if (idx === -1) {
+            return [...prev, {
+              id: data.msgId,
+              role: 'answer',
+              text: data.fullText,
+              status: 'streaming',
+              reqId: data.reqId,
+              createdAt: Date.now()
+            }];
+          }
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], text: data.fullText, status: 'streaming' };
+          return updated;
+        });
         break;
 
       case 'chat_done':
-        if (data.reqId !== activeReqIdRef.current) break;
+        if (activeReqIdRef.current && data.reqId !== activeReqIdRef.current) break;
         activeReqIdRef.current = null;
-        patchMessage(data.msgId, {
-          text: data.fullText,
-          status: 'complete',
-          totalTime: data.totalTime
+        setMessages(prev => {
+          const idx = prev.findIndex(m => m.id === data.msgId);
+          if (idx === -1) {
+            return [...prev, {
+              id: data.msgId,
+              role: 'answer',
+              text: data.fullText,
+              status: 'complete',
+              totalTime: data.totalTime,
+              createdAt: Date.now()
+            }];
+          }
+          const updated = [...prev];
+          updated[idx] = { ...updated[idx], text: data.fullText, status: 'complete', totalTime: data.totalTime };
+          return updated;
         });
         break;
 
@@ -260,6 +297,10 @@ export default function App() {
         setIsPaused(data.paused);
         break;
 
+      case 'heartbeat_ping':
+        wsRef.current?.send(JSON.stringify({ type: 'heartbeat_pong' }));
+        break;
+
       case 'history_cleared':
         setMessages([]);
         break;
@@ -288,8 +329,7 @@ export default function App() {
 
   const triggerAnswer = useCallback((questionText) => {
     const q = questionText || manualTranscript || committedTranscript || interimTranscript;
-    if (!q.trim()) return;
-    wsRef.current?.send(JSON.stringify({ type: 'trigger_answer', question: q.trim() }));
+    wsRef.current?.send(JSON.stringify({ type: 'trigger_answer', question: (q || '').trim() }));
     setManualTranscript('');
   }, [manualTranscript, committedTranscript, interimTranscript]);
 
@@ -351,6 +391,8 @@ export default function App() {
         sessionId={sessionId}
         messages={messages}
         isPaused={isPaused}
+        displayTranscript={displayTranscript}
+        onAudioChunk={handleAudioChunk}
         onTriggerAnswer={triggerAnswer}
         onExplainMore={() => handleExplainMore(latestAnswer?.id)}
         onClear={() => wsRef.current?.send(JSON.stringify({ type: 'clear_history' }))}

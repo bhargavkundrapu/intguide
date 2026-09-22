@@ -1,11 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles } from 'lucide-react';
+import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff } from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export default function MobileView({
   wsConnected,
   sessionId,
   messages = [],
   isPaused,
+  displayTranscript = '',
+  onAudioChunk,
   onTriggerAnswer,
   onExplainMore,
   onClear,
@@ -13,17 +16,89 @@ export default function MobileView({
   onJoinSession
 }) {
   const [manualCode, setManualCode] = useState('');
+  const [isPhoneMicActive, setIsPhoneMicActive] = useState(false);
+  const [micError, setMicError] = useState('');
   const bottomRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const streamRef = useRef(null);
 
   // Auto-scroll to latest message
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [messages.length, messages[messages.length - 1]?.text]);
+
+  // Keep phone screen awake during interview HUD mode
+  useEffect(() => {
+    let wakeLock = null;
+    const requestWakeLock = async () => {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {}
+    };
+
+    requestWakeLock();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') requestWakeLock();
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      wakeLock?.release().catch(() => {});
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, []);
+
+  // Optional Phone Mic capture
+  const togglePhoneMic = async () => {
+    if (isPhoneMicActive) {
+      // Stop mic
+      if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      setIsPhoneMicActive(false);
+      return;
+    }
+
+    setMicError('');
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone not supported on this browser (requires HTTPS).');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+        video: false
+      });
+      streamRef.current = stream;
+
+      const candidateTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/mp4',
+        ''
+      ];
+      const selectedType = candidateTypes.find(t => !t || MediaRecorder.isTypeSupported(t));
+      const recorder = selectedType
+        ? new MediaRecorder(stream, { mimeType: selectedType })
+        : new MediaRecorder(stream);
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0 && onAudioChunk) onAudioChunk(e.data);
+      };
+      recorder.start(250);
+      mediaRecorderRef.current = recorder;
+      setIsPhoneMicActive(true);
+    } catch (err) {
+      setMicError(err.message || 'Could not access phone microphone.');
+      setTimeout(() => setMicError(''), 4000);
+    }
+  };
 
   // Get latest question and answer for quick reference
   const latestQuestion = [...messages].reverse().find(m => m.role === 'question');
   const latestAnswer = [...messages].reverse().find(m => m.role === 'answer');
-  const isGenerating = latestAnswer?.status === 'streaming';
 
   return (
     <div className="mobile-shell">
@@ -39,17 +114,47 @@ export default function MobileView({
           Copilot HUD
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {/* Optional Phone Mic Toggle */}
+          <button
+            onClick={togglePhoneMic}
+            title={isPhoneMicActive ? 'Phone Mic Live' : 'Use Phone Mic'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '4px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600,
+              background: isPhoneMicActive ? '#fef2f2' : '#f1f5f9',
+              color: isPhoneMicActive ? '#dc2626' : '#64748b',
+              border: isPhoneMicActive ? '1px solid #fecaca' : '1px solid #e2e8f0',
+              cursor: 'pointer'
+            }}
+          >
+            {isPhoneMicActive ? <Mic size={12} className="status-dot live" /> : <MicOff size={12} />}
+            {isPhoneMicActive ? 'Mic On' : 'Mic'}
+          </button>
+
           {latestAnswer?.ttft > 0 && (
-            <span className="ttft-chip">⚡ {(latestAnswer.ttft / 1000).toFixed(2)}s</span>
+            <span className="ttft-chip" style={{ fontSize: 10, padding: '3px 6px' }}>
+              ⚡ {(latestAnswer.ttft / 1000).toFixed(2)}s
+            </span>
           )}
+
           {wsConnected ? (
-            <span className="badge badge-green"><Wifi size={10} /> Synced</span>
+            <span className="badge badge-green" style={{ fontSize: 10, padding: '3px 7px' }}>
+              <Wifi size={10} /> Synced
+            </span>
           ) : (
-            <span className="badge badge-amber"><WifiOff size={10} /> Connecting</span>
+            <span className="badge badge-amber" style={{ fontSize: 10, padding: '3px 7px' }}>
+              <WifiOff size={10} /> Connecting
+            </span>
           )}
         </div>
       </div>
+
+      {micError && (
+        <div style={{ background: '#fef2f2', color: '#dc2626', padding: '6px 12px', fontSize: 12, borderBottom: '1px solid #fecaca', textAlign: 'center' }}>
+          {micError}
+        </div>
+      )}
 
       {/* Session join (offline) */}
       {!wsConnected && (
@@ -77,11 +182,36 @@ export default function MobileView({
 
       {/* Chat Messages */}
       <div className="mobile-chat-list">
-        {messages.length === 0 && (
+        {/* Live Speech Indicator Card */}
+        {displayTranscript && (
+          <div className="mobile-live-transcript-card">
+            <div className="mobile-live-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div className="status-dot live" />
+                <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--blue-600)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                  Listening To Interviewer
+                </span>
+              </div>
+              <button
+                className="mobile-quick-answer-badge"
+                onClick={() => onTriggerAnswer(displayTranscript)}
+              >
+                <Zap size={11} /> Answer Now
+              </button>
+            </div>
+            <div className="mobile-live-body">
+              "{displayTranscript}"
+            </div>
+          </div>
+        )}
+
+        {messages.length === 0 && !displayTranscript && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 40, textAlign: 'center' }}>
             <Sparkles size={28} style={{ color: 'var(--gray-300)' }} />
-            <div style={{ fontSize: 14, color: 'var(--gray-500)', fontWeight: 500 }}>Ready for Live Answer</div>
-            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>Tap "Answer" or speak on laptop</div>
+            <div style={{ fontSize: 14, color: 'var(--gray-500)', fontWeight: 500 }}>Ready for Live Answers</div>
+            <div style={{ fontSize: 12, color: 'var(--gray-400)' }}>
+              {isPhoneMicActive ? 'Listening with phone microphone...' : 'Listening on laptop tab or mic...'}
+            </div>
           </div>
         )}
 
@@ -90,7 +220,7 @@ export default function MobileView({
             return (
               <div key={msg.id} className="mobile-chat-question">
                 <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--gray-400)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
-                  Interviewer
+                  Interviewer Question
                 </div>
                 "{msg.text}"
               </div>
@@ -118,14 +248,13 @@ export default function MobileView({
               {msg.status === 'streaming' && !msg.text && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--blue-600)' }}>
                   <div className="spinner" />
-                  <span style={{ fontSize: 13 }}>Generating...</span>
+                  <span style={{ fontSize: 13 }}>Thinking...</span>
                 </div>
               )}
 
               {msg.text && (
-                <div style={{ fontSize: 15, color: 'var(--gray-800)', lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>
-                  {msg.text}
-                  {msg.status === 'streaming' && <span className="streaming-cursor" />}
+                <div style={{ fontSize: 14, color: 'var(--gray-800)', lineHeight: 1.65 }}>
+                  <MarkdownRenderer text={msg.text} isStreaming={msg.status === 'streaming'} />
                 </div>
               )}
             </div>
@@ -138,7 +267,7 @@ export default function MobileView({
       <div className="mobile-bottombar">
         <button
           className="mobile-action-btn primary"
-          onClick={() => onTriggerAnswer(latestQuestion?.text)}
+          onClick={() => onTriggerAnswer(displayTranscript || latestQuestion?.text || '')}
         >
           <Zap size={16} />
           Answer

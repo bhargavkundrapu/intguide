@@ -74,11 +74,17 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
     try {
       let stream;
       if (sourceType === 'tab') {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+          throw new Error('Tab audio capture is only supported on desktop browsers (Chrome, Edge). Please switch to Mic mode.');
+        }
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
           audio: { echoCancellation: true, noiseSuppression: true, suppressLocalAudioPlayback: false }
         });
       } else {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Microphone access is not supported on this browser or page must be served over HTTPS.');
+        }
         stream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true },
           video: false
@@ -107,8 +113,19 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        const recorder = new MediaRecorder(audioOnlyStream, { mimeType: 'audio/webm;codecs=opus' });
+      if (window.MediaRecorder) {
+        const candidateTypes = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/mp4',
+          ''
+        ];
+        const selectedType = candidateTypes.find(t => !t || MediaRecorder.isTypeSupported(t));
+        const recorder = selectedType
+          ? new MediaRecorder(audioOnlyStream, { mimeType: selectedType })
+          : new MediaRecorder(audioOnlyStream);
+
         recorder.ondataavailable = (e) => {
           if (e.data.size > 0 && onAudioChunk) onAudioChunk(e.data);
         };

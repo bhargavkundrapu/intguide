@@ -4,6 +4,7 @@
   "description": "Real-time low-latency AI Interview Copilot server with WebSockets, Deepgram, and Groq/OpenAI streaming",
   "main": "server.js",
   "scripts": {
+    "build": "npm --prefix ../client install && npm --prefix ../client run build",
     "start": "node server.js",
     "dev": "node --watch server.js"
   },
