@@ -68,7 +68,7 @@ app.post('/api/context', (req, res) => {
   res.json({ success: true, context: candidateContext });
 });
 
-// Serve static frontend build
+// Serve frontend static build
 const clientDistPath = path.join(__dirname, '../client/dist');
 app.use(express.static(clientDistPath));
 app.get('*', (req, res) => {
@@ -169,7 +169,6 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
   const openAIKey = process.env.OPENAI_API_KEY;
 
   if (groqKey) {
-    // Exact working model list verified against Groq API endpoint
     const groqModels = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'allam-2-7b'];
     const groq = new Groq({ apiKey: groqKey });
     const systemPrompt = buildSystemPrompt(candidateContext, customInstruction);
@@ -205,7 +204,7 @@ async function streamAiAnswer(question, sessionId, customInstruction = "") {
 
         const totalTime = Date.now() - startTime;
         broadcastToSession(sessionId, { type: 'ai_stream_end', fullText: accumulated, totalTime });
-        return; // Success!
+        return;
       } catch (err) {
         console.warn(`Groq Model ${model} error: ${err.message}. Trying next model...`);
       }
@@ -261,7 +260,6 @@ function broadcastToSession(sessionId, data) {
   const payload = JSON.stringify(data);
   const session = sessions.get(sessionId);
 
-  // 1. Send to matched session
   if (session) {
     if (session.laptopWs && session.laptopWs.readyState === WebSocket.OPEN) {
       session.laptopWs.send(payload);
@@ -273,7 +271,7 @@ function broadcastToSession(sessionId, data) {
     }
   }
 
-  // 2. Universal fallback: Send to ALL connected mobile clients
+  // Universal fallback broadcast to ALL connected mobile clients
   for (const [sId, sess] of sessions.entries()) {
     if (sId !== sessionId) {
       for (const mWs of sess.mobileWss) {
@@ -290,11 +288,86 @@ wss.on('connection', (ws) => {
   let currentSessionId = null;
   let userRole = null;
   let deepgramWs = null;
+  let keepAliveInterval = null;
+
+  // Auto-reconnect & keep-alive manager for Deepgram STT socket
+  function ensureDeepgramSocket(sessionId) {
+    const dgKey = process.env.DEEPGRAM_API_KEY;
+    if (!dgKey) return null;
+
+    if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+      return deepgramWs;
+    }
+
+    if (deepgramWs && deepgramWs.readyState === WebSocket.CONNECTING) {
+      return deepgramWs;
+    }
+
+    const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&utterance_end_ms=1000&vad_events=true';
+
+    try {
+      deepgramWs = new WebSocket(dgUrl, {
+        headers: { Authorization: `Token ${dgKey}` }
+      });
+
+      deepgramWs.on('open', () => {
+        ws.send(JSON.stringify({ type: 'deepgram_status', status: 'connected' }));
+        
+        // Send KeepAlive pings every 5 seconds to prevent Deepgram idle disconnection
+        if (!keepAliveInterval) {
+          keepAliveInterval = setInterval(() => {
+            if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+              deepgramWs.send(JSON.stringify({ type: 'KeepAlive' }));
+            }
+          }, 5000);
+        }
+      });
+
+      deepgramWs.on('message', (dgMsg) => {
+        try {
+          const jsonPayload = JSON.parse(dgMsg.toString());
+          const transcript = jsonPayload.channel?.alternatives[0]?.transcript;
+          const isFinal = jsonPayload.is_final;
+          const speechFinal = jsonPayload.speech_final;
+
+          if (transcript && transcript.trim().length > 0) {
+            broadcastToSession(sessionId, {
+              type: 'transcript_update',
+              transcript: transcript,
+              isFinal: isFinal || speechFinal
+            });
+
+            if ((isFinal || speechFinal) && transcript.trim().length > 10) {
+              streamAiAnswer(transcript, sessionId);
+            }
+          }
+        } catch (err) {}
+      });
+
+      deepgramWs.on('error', (err) => {
+        console.error('Deepgram WS Error:', err.message);
+      });
+
+      deepgramWs.on('close', () => {
+        if (keepAliveInterval) {
+          clearInterval(keepAliveInterval);
+          keepAliveInterval = null;
+        }
+        deepgramWs = null;
+      });
+
+      return deepgramWs;
+    } catch (e) {
+      console.error('Deepgram socket init exception:', e.message);
+      return null;
+    }
+  }
 
   ws.on('message', async (message, isBinary) => {
     if (isBinary) {
-      if (deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
-        deepgramWs.send(message);
+      const dgSocket = ensureDeepgramSocket(currentSessionId || 'SESSION-1');
+      if (dgSocket && dgSocket.readyState === WebSocket.OPEN) {
+        dgSocket.send(message);
       }
       return;
     }
@@ -334,54 +407,15 @@ wss.on('connection', (ws) => {
         }
 
         case 'start_deepgram_flux': {
-          const dgKey = process.env.DEEPGRAM_API_KEY || data.apiKey;
-          if (!dgKey) {
-            ws.send(JSON.stringify({ type: 'deepgram_error', message: 'No Deepgram API key set.' }));
-            return;
-          }
-
-          const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&utterance_end_ms=1000';
-
-          try {
-            deepgramWs = new WebSocket(dgUrl, {
-              headers: { Authorization: `Token ${dgKey}` }
-            });
-
-            deepgramWs.on('open', () => {
-              ws.send(JSON.stringify({ type: 'deepgram_status', status: 'connected' }));
-            });
-
-            deepgramWs.on('message', (dgMsg) => {
-              try {
-                const jsonPayload = JSON.parse(dgMsg.toString());
-                const transcript = jsonPayload.channel?.alternatives[0]?.transcript;
-                const isFinal = jsonPayload.is_final;
-
-                if (transcript && transcript.trim().length > 0) {
-                  broadcastToSession(currentSessionId, {
-                    type: 'transcript_update',
-                    transcript: transcript,
-                    isFinal: isFinal
-                  });
-
-                  if (isFinal && transcript.trim().length > 10) {
-                    streamAiAnswer(transcript, currentSessionId);
-                  }
-                }
-              } catch (err) {}
-            });
-
-            deepgramWs.on('error', (err) => {
-              console.error('Deepgram WS Error:', err.message);
-              ws.send(JSON.stringify({ type: 'deepgram_error', message: err.message }));
-            });
-          } catch (e) {
-            ws.send(JSON.stringify({ type: 'deepgram_error', message: e.message }));
-          }
+          ensureDeepgramSocket(currentSessionId || 'SESSION-1');
           break;
         }
 
         case 'stop_deepgram': {
+          if (keepAliveInterval) {
+            clearInterval(keepAliveInterval);
+            keepAliveInterval = null;
+          }
           if (deepgramWs) {
             deepgramWs.close();
             deepgramWs = null;
@@ -432,6 +466,10 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+    }
     if (deepgramWs) deepgramWs.close();
   });
 });
