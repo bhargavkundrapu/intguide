@@ -1,6 +1,141 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff } from 'lucide-react';
+import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff, Edit2, AlertTriangle } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
+
+function MobileQuestionCard({ msg, onEditQuestion }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(msg.text);
+
+  const handleSave = () => {
+    if (draft.trim() && draft.trim() !== msg.text && onEditQuestion) {
+      onEditQuestion(msg.id, draft.trim());
+    }
+    setIsEditing(false);
+  };
+
+  return (
+    <div className="mobile-chat-question">
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--gray-400)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Interviewer Question
+          </span>
+          {msg.isEdited && (
+            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 4px' }}>
+              Edited
+            </span>
+          )}
+        </div>
+        {onEditQuestion && (
+          <button
+            onClick={() => {
+              setDraft(msg.text);
+              setIsEditing(!isEditing);
+            }}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--gray-400)',
+              fontSize: 11,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 3,
+              cursor: 'pointer',
+              padding: '2px 4px'
+            }}
+          >
+            <Edit2 size={11} /> {isEditing ? 'Cancel' : 'Edit'}
+          </button>
+        )}
+      </div>
+
+      {isEditing ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            rows={2}
+            style={{
+              width: '100%',
+              padding: '6px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--gray-300)',
+              fontSize: 13,
+              fontFamily: 'inherit'
+            }}
+            autoFocus
+          />
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => {
+                setDraft(msg.text);
+                setIsEditing(false);
+              }}
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: '3px 8px' }}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSave}
+              className="btn btn-primary"
+              style={{ fontSize: 11, padding: '3px 10px' }}
+            >
+              <Zap size={11} /> Update & Answer
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--gray-800)' }}>
+            "{msg.text}"
+          </div>
+
+          {msg.rawText && msg.rawText !== msg.text && (
+            <div style={{ fontSize: 10, color: 'var(--gray-400)', fontStyle: 'italic', marginTop: 3 }}>
+              Raw: "{msg.rawText}"
+            </div>
+          )}
+
+          {msg.uncertainWords?.length > 0 && !msg.isEdited && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              background: '#fffbeb',
+              border: '1px solid #fef3c7',
+              borderRadius: 6,
+              padding: '3px 6px',
+              marginTop: 6
+            }}>
+              <AlertTriangle size={11} style={{ color: '#d97706', flexShrink: 0 }} />
+              <span style={{ fontSize: 10, color: '#92400e', flex: 1 }}>
+                Uncertain: {msg.uncertainWords.map(w => `"${w.word}" (${Math.round(w.confidence * 100)}%)`).join(', ')}
+              </span>
+              <button
+                onClick={() => {
+                  setDraft(msg.text);
+                  setIsEditing(true);
+                }}
+                style={{
+                  background: '#fff',
+                  border: '1px solid #fde68a',
+                  borderRadius: 4,
+                  fontSize: 10,
+                  padding: '1px 5px',
+                  color: '#92400e',
+                  cursor: 'pointer'
+                }}
+              >
+                Fix
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export default function MobileView({
   wsConnected,
@@ -13,7 +148,8 @@ export default function MobileView({
   onExplainMore,
   onClear,
   onTogglePause,
-  onJoinSession
+  onJoinSession,
+  onEditQuestion
 }) {
   const [manualCode, setManualCode] = useState('');
   const [isPhoneMicActive, setIsPhoneMicActive] = useState(false);
@@ -218,12 +354,11 @@ export default function MobileView({
         {messages.map(msg => {
           if (msg.role === 'question') {
             return (
-              <div key={msg.id} className="mobile-chat-question">
-                <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--gray-400)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 5 }}>
-                  Interviewer Question
-                </div>
-                "{msg.text}"
-              </div>
+              <MobileQuestionCard
+                key={msg.id}
+                msg={msg}
+                onEditQuestion={onEditQuestion}
+              />
             );
           }
 

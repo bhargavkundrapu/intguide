@@ -1405,3 +1405,171 @@ body {
   border-color: #fecaca;
 }
 
+/* ══════════════════════════════════════════════
+   CODE BLOCK & MARKDOWN (PITCH BLACK BACKGROUND)
+══════════════════════════════════════════════ */
+.code-block-wrapper {
+  margin: 10px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #090d16;
+  border: 1px solid #1e293b;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+
+.code-lang-label {
+  font-size: 11px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: #38bdf8;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.code-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.code-copy-btn:hover {
+  background: #334155;
+  color: #f1f5f9;
+}
+
+.code-block {
+  margin: 0;
+  padding: 12px 14px;
+  background: #090d16 !important;
+  color: #f8fafc !important;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre;
+  -webkit-overflow-scrolling: touch;
+}
+
+.code-block code {
+  font-family: inherit;
+  color: inherit;
+  background: transparent;
+}
+
+.inline-code {
+  background: #0f172a;
+  color: #38bdf8;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.9em;
+  border: 1px solid #1e293b;
+}
+
+/* Markdown typography in answers */
+.md-h2 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  margin: 12px 0 6px 0;
+  line-height: 1.3;
+}
+
+.md-h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e293b;
+  margin: 10px 0 4px 0;
+  line-height: 1.35;
+}
+
+.md-h4 {
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+  margin: 8px 0 4px 0;
+}
+
+.md-p {
+  margin: 0 0 8px 0;
+  line-height: 1.6;
+}
+
+.md-ul, .md-ol {
+  margin: 4px 0 8px 0;
+  padding-left: 20px;
+}
+
+.md-ul li, .md-ol li {
+  margin-bottom: 4px;
+  line-height: 1.55;
+}
+
+/* Live transcript card on mobile */
+.mobile-live-transcript-card {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.08);
+}
+
+.mobile-live-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mobile-live-body {
+  font-size: 13px;
+  font-style: italic;
+  color: #1e40af;
+  line-height: 1.45;
+}
+
+.mobile-quick-answer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.uncertain-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+

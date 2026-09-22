@@ -197,6 +197,9 @@ export default function App() {
           id: data.msgId,
           role: 'question',
           text: data.text,
+          rawText: data.rawText || data.text,
+          uncertainWords: data.uncertainWords || [],
+          isEdited: Boolean(data.isEdited),
           status: 'complete',
           parentId: null,
           reqId: null,
@@ -209,7 +212,13 @@ export default function App() {
       case 'question_updated':
         setMessages(prev =>
           prev
-            .map(m => (m.id === data.msgId ? { ...m, text: data.text } : m))
+            .map(m => (m.id === data.msgId ? {
+              ...m,
+              text: data.text,
+              rawText: data.rawText || m.rawText || data.text,
+              uncertainWords: data.uncertainWords !== undefined ? data.uncertainWords : m.uncertainWords,
+              isEdited: data.isEdited !== undefined ? data.isEdited : m.isEdited
+            } : m))
             .filter(m => !(m.role === 'answer' && m.parentId === data.msgId && m.status !== 'complete'))
         );
         break;
@@ -353,6 +362,15 @@ export default function App() {
     wsRef.current?.send(JSON.stringify({ type: 'continue_answer', msgId }));
   }, []);
 
+  const handleEditQuestion = useCallback((msgId, newText) => {
+    if (!msgId || !newText?.trim()) return;
+    wsRef.current?.send(JSON.stringify({
+      type: 'edit_question',
+      msgId,
+      newText: newText.trim()
+    }));
+  }, []);
+
   const handleTogglePause = useCallback(() => {
     const next = !isPaused;
     setIsPaused(next);
@@ -406,6 +424,7 @@ export default function App() {
         onClear={() => wsRef.current?.send(JSON.stringify({ type: 'clear_history' }))}
         onTogglePause={handleTogglePause}
         onJoinSession={handleJoinSession}
+        onEditQuestion={handleEditQuestion}
       />
     );
   }
@@ -578,6 +597,7 @@ export default function App() {
                     messages={messages}
                     onContinue={handleContinue}
                     onExplainMore={handleExplainMore}
+                    onEditQuestion={handleEditQuestion}
                   />
                 </div>
               </div>

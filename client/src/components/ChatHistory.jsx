@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   User, Sparkles, Zap, AlertCircle, CheckCircle, Clock,
-  ArrowDown, RefreshCw, Copy, Check, ChevronDown
+  ArrowDown, RefreshCw, Copy, Check, ChevronDown, Edit2, AlertTriangle
 } from 'lucide-react';
+import MarkdownRenderer from './MarkdownRenderer';
 
 // ─────────────────────────────────────────────────────────────
 //  Simple inline markdown renderer (no deps)
@@ -134,7 +135,125 @@ function StatusBadge({ status }) {
 // ─────────────────────────────────────────────────────────────
 //  Single message bubble
 // ─────────────────────────────────────────────────────────────
-function MessageBubble({ msg, onContinue, onExplainMore }) {
+function QuestionBubble({ msg, onEditQuestion }) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftText, setDraftText] = useState(msg.text);
+
+  const handleSave = () => {
+    if (draftText.trim() && draftText.trim() !== msg.text && onEditQuestion) {
+      onEditQuestion(msg.id, draftText.trim());
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSave();
+    } else if (e.key === 'Escape') {
+      setDraftText(msg.text);
+      setIsEditing(false);
+    }
+  };
+
+  return (
+    <div className="chat-msg chat-msg-question">
+      <div className="chat-msg-header">
+        <div className="chat-role-label">
+          <User size={12} />
+          Interviewer
+          {msg.isEdited && (
+            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 5px', marginLeft: 4 }}>
+              Edited
+            </span>
+          )}
+        </div>
+        {onEditQuestion && (
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 11, padding: '2px 6px', color: 'var(--gray-500)', display: 'flex', alignItems: 'center', gap: 3 }}
+            onClick={() => {
+              setDraftText(msg.text);
+              setIsEditing(!isEditing);
+            }}
+            title="Edit question & regenerate answer"
+          >
+            <Edit2 size={11} /> {isEditing ? 'Cancel' : 'Edit'}
+          </button>
+        )}
+      </div>
+
+      {isEditing ? (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <textarea
+            className="transcript-area"
+            rows={2}
+            value={draftText}
+            onChange={e => setDraftText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            autoFocus
+            placeholder="Correct the question..."
+            style={{ fontSize: 13, background: 'var(--card-bg)' }}
+          />
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: '3px 8px' }}
+              onClick={() => {
+                setDraftText(msg.text);
+                setIsEditing(false);
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 11, padding: '3px 10px' }}
+              onClick={handleSave}
+            >
+              <Zap size={11} /> Regenerate Answer
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="chat-bubble-question">
+            {msg.text}
+          </div>
+
+          {/* Raw transcript preserved separately */}
+          {msg.rawText && msg.rawText !== msg.text && (
+            <div style={{ fontSize: 11, color: 'var(--gray-400)', fontStyle: 'italic', marginTop: 4, paddingLeft: 4 }}>
+              Raw: "{msg.rawText}"
+            </div>
+          )}
+
+          {/* Uncertainty alert chip for important words */}
+          {msg.uncertainWords?.length > 0 && !msg.isEdited && (
+            <div className="uncertain-chip" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6, background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: 6, padding: '4px 8px' }}>
+              <AlertTriangle size={12} style={{ color: '#d97706', flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: '#92400e' }}>
+                Uncertain: {msg.uncertainWords.map(w => `"${w.word}" (${Math.round(w.confidence * 100)}%)`).join(', ')}
+              </span>
+              <button
+                className="btn btn-secondary"
+                style={{ fontSize: 10, padding: '2px 6px', marginLeft: 'auto', background: '#ffffff', borderColor: '#fde68a' }}
+                onClick={() => {
+                  setDraftText(msg.text);
+                  setIsEditing(true);
+                }}
+              >
+                Correct
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
   const [copied, setCopied] = useState(false);
 
   const copyText = () => {
@@ -144,19 +263,7 @@ function MessageBubble({ msg, onContinue, onExplainMore }) {
   };
 
   if (msg.role === 'question') {
-    return (
-      <div className="chat-msg chat-msg-question">
-        <div className="chat-msg-header">
-          <div className="chat-role-label">
-            <User size={12} />
-            Interviewer
-          </div>
-        </div>
-        <div className="chat-bubble-question">
-          {msg.text}
-        </div>
-      </div>
-    );
+    return <QuestionBubble msg={msg} onEditQuestion={onEditQuestion} />;
   }
 
   // Answer message
@@ -192,7 +299,7 @@ function MessageBubble({ msg, onContinue, onExplainMore }) {
 
         {msg.text ? (
           <div className="answer-text">
-            {renderMarkdown(msg.text)}
+            <MarkdownRenderer text={msg.text} isStreaming={msg.status === 'streaming'} />
           </div>
         ) : null}
 
@@ -243,7 +350,7 @@ function MessageBubble({ msg, onContinue, onExplainMore }) {
 // ─────────────────────────────────────────────────────────────
 //  Chat History container
 // ─────────────────────────────────────────────────────────────
-export default function ChatHistory({ messages, onContinue, onExplainMore }) {
+export default function ChatHistory({ messages, onContinue, onExplainMore, onEditQuestion }) {
   const containerRef = useRef(null);
   const bottomRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -312,6 +419,7 @@ export default function ChatHistory({ messages, onContinue, onExplainMore }) {
             msg={msg}
             onContinue={onContinue}
             onExplainMore={onExplainMore}
+            onEditQuestion={onEditQuestion}
           />
         ))}
         <div ref={bottomRef} />

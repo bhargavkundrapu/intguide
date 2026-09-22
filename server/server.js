@@ -29,13 +29,83 @@ const hashText = t => crypto.createHash('sha1').update(t.trim().toLowerCase()).d
 //  Global candidate context (per-deployment default)
 // ─────────────────────────────────────────────────────────────
 const candidateContext = {
-  resume: "Senior Full Stack Software Engineer with 5+ years in React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, and AI integrations.",
-  targetRole: "Senior Full Stack / Backend Engineer",
-  jobDescription: "Build low-latency real-time web applications, scale Node.js services, design clean UIs, work with LLM APIs.",
-  projects: "1. Real-time Audio Analytics Platform: WebSockets, Node.js pipelines, React dashboard.\n2. E-Commerce Microservices: 2M daily requests on AWS ECS with Redis caching.",
+  resume: "Senior Full Stack Software Engineer with 5+ years in React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks, and AI integrations.",
+  targetRole: "Senior Data / Full Stack Engineer",
+  jobDescription: "Build low-latency real-time applications, large-scale data pipelines with PySpark and Databricks, scale Node.js services, design clean UIs, work with LLM APIs.",
+  projects: "1. Real-time Audio Analytics Platform: WebSockets, Node.js pipelines, React dashboard.\n2. Data Lakehouse Architecture: PySpark, Delta Lake, Databricks, Redshift, Athena for 10TB+ daily telemetry.",
   guardrails: "Use only verified candidate facts. For missing experience, give industry best-practice answer and note candidate familiarity. Never invent metrics, employers, or results.",
   language: "English"
 };
+
+// ─────────────────────────────────────────────────────────────
+//  Technical Vocabulary & Deepgram Keyterm Prompting
+// ─────────────────────────────────────────────────────────────
+const technicalVocabulary = new Set([
+  // Core Data & Big Data Engineering
+  'PySpark', 'coalesce', 'repartition', 'Databricks', 'Athena', 'Redshift',
+  'broadcast join', 'shuffle join', 'partition projection', 'dense_rank', 'row_number',
+  'DataFrame', 'RDD', 'Spark SQL', 'MapReduce', 'Hadoop', 'Parquet', 'Delta Lake',
+  // Common backend & distributed systems
+  'Kafka', 'PostgreSQL', 'Redis', 'WebSockets', 'GraphQL', 'Docker', 'Kubernetes',
+  // Key algorithmic concepts
+  'palindrome', 'two pointer', 'sliding window', 'binary search', 'dynamic programming',
+  'depth first search', 'breadth first search', 'memoization', 'in-place',
+  // Phonetically tricky terms
+  'asynchronous', 'concurrency', 'idempotent', 'polymorphism', 'encapsulation',
+  'microservices', 'load balancer', 'sharding', 'replication'
+]);
+
+function getTechnicalVocabularyList() {
+  const list = new Set(technicalVocabulary);
+  if (candidateContext.resume) {
+    candidateContext.resume.split(/[,.\n;()]+/).forEach(token => {
+      const trimmed = token.trim();
+      if (trimmed.length > 2 && trimmed.length < 35 && !/^(with|years?|in|and|for|the|of|to)\b/i.test(trimmed)) {
+        list.add(trimmed);
+      }
+    });
+  }
+  return Array.from(list);
+}
+
+// Critical words classification for word-level confidence checking
+const NEGATION_WORDS = new Set(['not', 'never', 'no', 'without', 'neither', 'nor']);
+const COMPARISON_WORDS = new Set(['difference', 'versus', 'vs', 'ascending', 'descending', 'in-place', 'recursive', 'iterative']);
+
+function analyzeWordUncertainty(wordsArray, vocabSet) {
+  if (!Array.isArray(wordsArray) || wordsArray.length === 0) {
+    return { hasUncertainty: false, uncertainWords: [] };
+  }
+
+  const uncertainWords = [];
+  for (const w of wordsArray) {
+    const cleanWord = (w.word || '').trim().toLowerCase();
+    const conf = typeof w.confidence === 'number' ? w.confidence : 1.0;
+
+    const isNegation = NEGATION_WORDS.has(cleanWord);
+    const isComparison = COMPARISON_WORDS.has(cleanWord);
+    const isNumber = /^\d+$/.test(cleanWord);
+    const isTech = Array.from(vocabSet).some(term => term.toLowerCase().includes(cleanWord) && cleanWord.length > 3);
+
+    const isCritical = isNegation || isComparison || isNumber || isTech;
+
+    // Flag low-confidence critical words (< 0.68)
+    if (isCritical && conf < 0.68) {
+      uncertainWords.push({
+        word: w.punctuated_word || w.word,
+        rawWord: cleanWord,
+        confidence: Math.round(conf * 100),
+        isCritical: true,
+        type: isNegation ? 'negation' : isTech ? 'technical' : isNumber ? 'number' : 'comparison'
+      });
+    }
+  }
+
+  return {
+    hasUncertainty: uncertainWords.length > 0,
+    uncertainWords
+  };
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Session store: sessionId → ConversationSession
@@ -110,6 +180,7 @@ class TranscriptAccumulator {
     this.sessionId = sessionId;
     this.committed = '';      // stable committed text
     this.interim = '';        // current interim (not yet final)
+    this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle after 1.4s of quiet
@@ -133,9 +204,13 @@ class TranscriptAccumulator {
     this._scheduleSettle(this.SETTLE_MS);
   }
 
-  addFinal(text, speechFinal) {
+  addFinal(text, speechFinal, words = []) {
     if (this.isNoiseOnly(text)) return null;
     if (!this.speechStartTime) this.speechStartTime = Date.now();
+
+    if (Array.isArray(words) && words.length > 0) {
+      this.words.push(...words);
+    }
 
     // Append to committed buffer
     this.committed = this.committed
@@ -159,6 +234,12 @@ class TranscriptAccumulator {
       this._scheduleSettle(this.SETTLE_MS);
     }
     return null;
+  }
+
+  consumeWords() {
+    const w = [...this.words];
+    this.words = [];
+    return w;
   }
 
   forceCommit(overrideText) {
@@ -190,13 +271,14 @@ class TranscriptAccumulator {
         }
       }
 
+      const words = this.consumeWords();
       this.committed = '';
       this.interim = '';
       this.speechStartTime = null;
 
       if (full && !this.isNoiseOnly(full)) {
         const session = sessions.get(this.sessionId);
-        if (session) commitQuestion(this.sessionId, full, session);
+        if (session) commitQuestion(this.sessionId, full, session, words, full);
       }
     }, ms || this.SETTLE_MS);
   }
@@ -325,9 +407,12 @@ function notifyPeerStatus(sessionId) {
 // ─────────────────────────────────────────────────────────────
 //  Commit a question → start answer generation
 // ─────────────────────────────────────────────────────────────
-function commitQuestion(sessionId, questionText, session) {
+function commitQuestion(sessionId, questionText, session, words = [], rawTranscript = null) {
   const trimmed = questionText.trim();
   if (!trimmed) return;
+
+  const rawText = rawTranscript || trimmed;
+  const analysis = analyzeWordUncertainty(words, technicalVocabulary);
 
   // ── 5-Second Stitching & Follow-up Completion Rule ──
   // If a question was committed within the last 5 seconds, and:
@@ -353,6 +438,8 @@ function commitQuestion(sessionId, questionText, session) {
 
     // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
     lastQ.text = `${lastQ.text.trim()} ${trimmed}`;
+    lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text.trim()} ${rawText}`;
+    lastQ.uncertainWords = analysis.uncertainWords;
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);
 
@@ -361,6 +448,8 @@ function commitQuestion(sessionId, questionText, session) {
       type: 'question_updated',
       msgId: lastQ.id,
       text: lastQ.text,
+      rawText: lastQ.rawText,
+      uncertainWords: lastQ.uncertainWords,
       sessionId
     });
 
@@ -379,6 +468,9 @@ function commitQuestion(sessionId, questionText, session) {
     id: qMsgId,
     role: 'question',
     text: trimmed,
+    rawText: rawText,
+    uncertainWords: analysis.uncertainWords,
+    isEdited: false,
     status: 'complete',
     parentId: null,
     reqId: null,
@@ -392,6 +484,8 @@ function commitQuestion(sessionId, questionText, session) {
     type: 'question_committed',
     msgId: qMsgId,
     text: trimmed,
+    rawText: rawText,
+    uncertainWords: analysis.uncertainWords,
     sessionId
   });
 
@@ -684,6 +778,26 @@ app.post('/api/context', (req, res) => {
   res.json({ success: true, context: candidateContext });
 });
 
+app.get('/api/vocabulary', (req, res) => {
+  res.json({
+    terms: getTechnicalVocabularyList(),
+    count: technicalVocabulary.size
+  });
+});
+
+app.post('/api/vocabulary', (req, res) => {
+  const { terms, term } = req.body;
+  if (term && typeof term === 'string') {
+    technicalVocabulary.add(term.trim());
+  }
+  if (Array.isArray(terms)) {
+    terms.forEach(t => {
+      if (typeof t === 'string' && t.trim()) technicalVocabulary.add(t.trim());
+    });
+  }
+  res.json({ success: true, terms: getTechnicalVocabularyList() });
+});
+
 // History endpoint — restore chat on reconnect
 app.get('/api/history/:sessionId', (req, res) => {
   const session = sessions.get(req.params.sessionId);
@@ -747,14 +861,31 @@ wss.on('connection', (ws) => {
   let keepAliveInterval = null;
   const audioChunkQueue = [];
 
+  function buildDeepgramUrl() {
+    const params = new URLSearchParams();
+    params.set('model', 'nova-2');
+    params.set('smart_format', 'true');
+    params.set('interim_results', 'true');
+    params.set('utterance_end_ms', '1200');
+    params.set('vad_events', 'true');
+    params.set('filler_words', 'false');
+
+    // Add technical vocabulary via repeated keywords parameters with :2 boost
+    const terms = getTechnicalVocabularyList();
+    for (const term of terms) {
+      params.append('keywords', `${term}:2`);
+    }
+
+    return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
+  }
+
   function ensureDeepgramSocket(sessionId) {
     const dgKey = process.env.DEEPGRAM_API_KEY;
     if (!dgKey) return null;
     if (deepgramWs?.readyState === WebSocket.OPEN) return deepgramWs;
     if (deepgramWs?.readyState === WebSocket.CONNECTING) return deepgramWs;
 
-    // Use nova-2 for universal API key compatibility with vad_events & utterance_end_ms
-    const dgUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&utterance_end_ms=1200&vad_events=true&filler_words=false';
+    const dgUrl = buildDeepgramUrl();
 
     try {
       deepgramWs = new WebSocket(dgUrl, { headers: { Authorization: `Token ${dgKey}` } });
@@ -784,6 +915,7 @@ wss.on('connection', (ws) => {
           if (!session) return;
 
           const transcript = payload.channel?.alternatives[0]?.transcript || '';
+          const words = payload.channel?.alternatives[0]?.words || [];
           const isFinal = payload.is_final;
           const speechFinal = payload.speech_final;
           const type = payload.type;
@@ -808,8 +940,10 @@ wss.on('connection', (ws) => {
             });
 
             if (isFinal) {
-              const committed = session.transcriptAccumulator.addFinal(transcript, speechFinal);
-              if (committed) commitQuestion(sessionId, committed, session);
+              const committed = session.transcriptAccumulator.addFinal(transcript, speechFinal, words);
+              if (committed) {
+                commitQuestion(sessionId, committed, session, session.transcriptAccumulator.consumeWords(), committed);
+              }
             } else {
               session.transcriptAccumulator.addInterim(transcript);
             }
@@ -820,8 +954,9 @@ wss.on('connection', (ws) => {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
             if (full && !acc.isIncomplete(full)) {
+              const words = acc.consumeWords();
               const committed = acc.forceCommit();
-              if (committed) commitQuestion(sessionId, committed, session);
+              if (committed) commitQuestion(sessionId, committed, session, words, committed);
             }
           }
         } catch (e) {
@@ -988,6 +1123,46 @@ wss.on('connection', (ws) => {
 
         case 'pause_listening': {
           broadcastToSession(currentSessionId, { type: 'listening_status', paused: data.paused });
+          break;
+        }
+
+        case 'edit_question': {
+          // Edit a misunderstood question and regenerate answer cleanly
+          const session = sessions.get(currentSessionId);
+          if (!session || !data.msgId || !data.newText?.trim()) break;
+
+          const qMsg = session.messages.find(m => m.id === data.msgId);
+          if (!qMsg || qMsg.role !== 'question') break;
+
+          const updatedText = data.newText.trim();
+
+          // Abort current answer generation if active
+          if (session.activeAbort) {
+            session.activeAbort.abort();
+            session.activeAbort = null;
+          }
+          session.activeReqId = null;
+
+          // Remove any in-progress or interrupted answer associated with this question
+          session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === qMsg.id));
+
+          // Update question text and mark as edited
+          qMsg.text = updatedText;
+          qMsg.isEdited = true;
+          qMsg.uncertainWords = [];
+          session.pendingQuestionHash = hashText(updatedText);
+
+          // Broadcast question update to laptop and mobile HUD
+          broadcastToSession(currentSessionId, {
+            type: 'question_updated',
+            msgId: qMsg.id,
+            text: updatedText,
+            isEdited: true,
+            sessionId: currentSessionId
+          });
+
+          // Generate fresh answer under new request ID
+          streamAiAnswer(currentSessionId, updatedText, qMsg.id, session);
           break;
         }
 

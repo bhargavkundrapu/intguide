@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, X, Save, Check } from 'lucide-react';
+import { User, X, Save, Check, Tag, Plus } from 'lucide-react';
 
 export default function ContextDrawer({ isOpen, onClose, context, onSaveContext }) {
   const [form, setForm] = useState({
@@ -9,11 +9,41 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
     projects: '',
     guardrails: ''
   });
+  const [vocabulary, setVocabulary] = useState([]);
+  const [newTerm, setNewTerm] = useState('');
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (context) setForm({ ...context });
   }, [context]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetch('/api/vocabulary')
+        .then(r => r.json())
+        .then(data => {
+          if (data.terms) setVocabulary(data.terms);
+        })
+        .catch(() => {});
+    }
+  }, [isOpen]);
+
+  const handleAddTerm = (e) => {
+    e.preventDefault();
+    if (!newTerm.trim()) return;
+    const added = newTerm.split(',').map(t => t.trim()).filter(Boolean);
+    fetch('/api/vocabulary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms: added })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.terms) setVocabulary(data.terms);
+        setNewTerm('');
+      })
+      .catch(() => {});
+  };
 
   const handleSave = () => {
     onSaveContext(form);
@@ -101,6 +131,53 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
               value={form.guardrails}
               onChange={e => setForm(p => ({ ...p, guardrails: e.target.value }))}
             />
+          </div>
+
+          <div className="form-group" style={{ borderTop: '1px solid var(--gray-200)', paddingTop: 14, marginTop: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0 }}>
+                <Tag size={12} style={{ color: 'var(--blue-600)' }} />
+                Speech Vocabulary (Deepgram Keyterms)
+              </label>
+              <span style={{ fontSize: 10, color: 'var(--gray-400)' }}>
+                {vocabulary.length} active terms
+              </span>
+            </div>
+            <p style={{ fontSize: 11, color: 'var(--gray-500)', margin: '0 0 8px 0' }}>
+              Specialized keywords boosted in Deepgram speech recognition to prevent mishearing.
+            </p>
+
+            <form onSubmit={handleAddTerm} style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+              <input
+                className="form-input"
+                style={{ fontSize: 12, padding: '6px 10px' }}
+                placeholder="Add term(s), comma-separated (e.g. PySpark, dense_rank)..."
+                value={newTerm}
+                onChange={e => setNewTerm(e.target.value)}
+              />
+              <button type="submit" className="btn btn-secondary" style={{ fontSize: 11, padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                <Plus size={12} /> Add
+              </button>
+            </form>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto', padding: '4px 0' }}>
+              {vocabulary.map((term, i) => (
+                <span
+                  key={i}
+                  style={{
+                    fontSize: 11,
+                    background: 'var(--blue-50)',
+                    color: 'var(--blue-700)',
+                    border: '1px solid var(--blue-100)',
+                    borderRadius: 4,
+                    padding: '2px 7px',
+                    fontFamily: 'JetBrains Mono, monospace'
+                  }}
+                >
+                  {term}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
 
