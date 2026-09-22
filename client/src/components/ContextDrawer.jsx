@@ -1,137 +1,120 @@
 import React, { useState, useEffect } from 'react';
-import { User, Briefcase, FileText, ShieldAlert, Save, Check, X, Sparkles } from 'lucide-react';
+import { User, X, Save, Check } from 'lucide-react';
 
 export default function ContextDrawer({ isOpen, onClose, context, onSaveContext }) {
-  const [formData, setFormData] = useState({
-    targetRole: '',
+  const [form, setForm] = useState({
     resume: '',
-    projects: '',
+    targetRole: '',
     jobDescription: '',
+    projects: '',
     guardrails: ''
   });
-
-  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    if (context) {
-      setFormData({
-        targetRole: context.targetRole || '',
-        resume: context.resume || '',
-        projects: context.projects || '',
-        jobDescription: context.jobDescription || '',
-        guardrails: context.guardrails || ''
-      });
-    }
+    if (context) setForm({ ...context });
   }, [context]);
+
+  const handleSave = () => {
+    onSaveContext(form);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); onClose(); }, 900);
+  };
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onSaveContext(formData);
-    setSavedSuccess(true);
-    setTimeout(() => {
-      setSavedSuccess(false);
-      onClose();
-    }, 800);
-  };
-
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-slate-900/50 backdrop-blur-sm animate-fade-in">
-      <div className="w-full max-w-xl bg-white border-l border-slate-200 h-full p-6 overflow-y-auto flex flex-col justify-between shadow-2xl">
-        <div>
-          <div className="flex items-center justify-between pb-4 mb-6 border-b border-slate-100">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-indigo-600" />
-              <h2 className="font-heading text-xl font-bold text-slate-900">Candidate Background Context</h2>
+    <>
+      <div className="drawer-overlay" onClick={onClose} />
+      <div className="drawer-panel">
+        {/* Header */}
+        <div className="drawer-header">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{
+              width: 30, height: 30, background: 'var(--blue-50)', border: '1px solid var(--blue-100)',
+              borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              <User size={14} style={{ color: 'var(--blue-600)' }} />
             </div>
-            <button onClick={onClose} className="p-2 text-slate-400 hover:text-slate-900 rounded-lg hover:bg-slate-100">
-              <X className="w-5 h-5" />
-            </button>
+            <span className="drawer-title">My Background</span>
           </div>
+          <button className="btn btn-ghost" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
 
-          <p className="text-xs text-slate-600 mb-6">
-            The AI Copilot uses this exact background context to tailor direct answers. It will never invent candidate experience and strictly flags missing technical details.
+        {/* Body */}
+        <div className="drawer-body">
+          <p style={{ fontSize: 12, color: 'var(--gray-500)', lineHeight: 1.5 }}>
+            Fill in your background so the AI copilot can tailor answers to your experience and target role.
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Briefcase className="w-3.5 h-3.5 text-indigo-600" /> Target Role / Seniority
-              </label>
-              <input
-                type="text"
-                value={formData.targetRole}
-                onChange={(e) => setFormData({ ...formData, targetRole: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
-                placeholder="e.g. Senior Full Stack Engineer / Systems Architect"
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Target Role</label>
+            <input
+              className="form-input"
+              placeholder="e.g. Senior Full Stack Engineer"
+              value={form.targetRole}
+              onChange={e => setForm(p => ({ ...p, targetRole: e.target.value }))}
+            />
+          </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <User className="w-3.5 h-3.5 text-indigo-600" /> Résumé Summary & Core Skills
-              </label>
-              <textarea
-                rows={4}
-                value={formData.resume}
-                onChange={(e) => setFormData({ ...formData, resume: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white font-mono"
-                placeholder="Paste key bullet points from your résumé..."
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Résumé Summary</label>
+            <textarea
+              className="form-textarea"
+              rows={4}
+              placeholder="Brief summary of your experience, skills, and years..."
+              value={form.resume}
+              onChange={e => setForm(p => ({ ...p, resume: e.target.value }))}
+            />
+          </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-indigo-600" /> Key Projects & Architectures
-              </label>
-              <textarea
-                rows={3}
-                value={formData.projects}
-                onChange={(e) => setFormData({ ...formData, projects: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white font-mono"
-                placeholder="Summarize 2-3 real past projects with tech stack and metrics..."
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Job Description</label>
+            <textarea
+              className="form-textarea"
+              rows={3}
+              placeholder="Paste the job description or role requirements..."
+              value={form.jobDescription}
+              onChange={e => setForm(p => ({ ...p, jobDescription: e.target.value }))}
+            />
+          </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1 flex items-center gap-1.5">
-                <Briefcase className="w-3.5 h-3.5 text-indigo-600" /> Target Job Description
-              </label>
-              <textarea
-                rows={3}
-                value={formData.jobDescription}
-                onChange={(e) => setFormData({ ...formData, jobDescription: e.target.value })}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white font-mono"
-                placeholder="Paste target job responsibilities..."
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">Key Projects</label>
+            <textarea
+              className="form-textarea"
+              rows={4}
+              placeholder="List your main projects, technologies used, and impact..."
+              value={form.projects}
+              onChange={e => setForm(p => ({ ...p, projects: e.target.value }))}
+            />
+          </div>
 
-            <div>
-              <label className="block text-xs font-bold text-amber-700 mb-1 flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-amber-600" /> Strict AI Guardrails
-              </label>
-              <textarea
-                rows={2}
-                value={formData.guardrails}
-                onChange={(e) => setFormData({ ...formData, guardrails: e.target.value })}
-                className="w-full bg-amber-50/50 border border-amber-200 rounded-xl p-3 text-xs text-amber-900 focus:outline-none focus:border-amber-600 font-mono"
-                placeholder="Custom rules (e.g. Never lie about candidate's past metrics...)"
-              />
-            </div>
+          <div className="form-group">
+            <label className="form-label">AI Guardrails</label>
+            <textarea
+              className="form-textarea"
+              rows={2}
+              placeholder="e.g. Don't invent fake metrics. Stick to my actual experience."
+              value={form.guardrails}
+              onChange={e => setForm(p => ({ ...p, guardrails: e.target.value }))}
+            />
+          </div>
+        </div>
 
-            <div className="pt-4 flex items-center justify-end gap-3">
-              <button type="button" onClick={onClose} className="btn-secondary">
-                Cancel
-              </button>
-              <button type="submit" className="btn-primary">
-                {savedSuccess ? <Check className="w-4 h-4 text-emerald-300" /> : <Save className="w-4 h-4" />}
-                {savedSuccess ? 'Saved!' : 'Save Background'}
-              </button>
-            </div>
-          </form>
+        {/* Footer */}
+        <div className="drawer-footer">
+          <button className="btn btn-secondary" onClick={onClose} style={{ flex: 1 }}>
+            Cancel
+          </button>
+          <button className="btn btn-primary" onClick={handleSave} style={{ flex: 1 }}>
+            {saved ? <Check size={13} /> : <Save size={13} />}
+            {saved ? 'Saved!' : 'Save Background'}
+          </button>
         </div>
       </div>
-    </div>
+    </>
   );
 }

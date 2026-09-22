@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, Monitor, Volume2, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react';
+import { Mic, Monitor, Volume2, AlertCircle, CheckCircle, StopCircle } from 'lucide-react';
 
 export default function AudioCapture({ onAudioChunk, isListening, setIsListening, onTranscriptUpdate }) {
   const [sourceType, setSourceType] = useState('tab');
@@ -14,64 +14,57 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
   const mediaRecorderRef = useRef(null);
   const speechRecognitionRef = useRef(null);
 
-  // Web Speech API fallback for local mic
+  // Web Speech API fallback
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SR) {
+      const recognition = new SR();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
-
       recognition.onresult = (event) => {
-        let interim = '';
-        let final = '';
+        let interim = '', final = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
-          if (event.results[i].isFinal) final += transcript;
-          else interim += transcript;
+          const t = event.results[i][0].transcript;
+          if (event.results[i].isFinal) final += t;
+          else interim += t;
         }
         if (onTranscriptUpdate) {
           if (final) onTranscriptUpdate(final, true);
           else if (interim) onTranscriptUpdate(interim, false);
         }
       };
-
       speechRecognitionRef.current = recognition;
     }
   }, [onTranscriptUpdate]);
 
-  // Canvas waveform loop
+  // Canvas waveform
   useEffect(() => {
     let animId;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-
     const draw = () => {
       if (analyserRef.current && isListening) {
-        const bufferLength = analyserRef.current.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        analyserRef.current.getByteFrequencyData(dataArray);
-
+        const buf = analyserRef.current.frequencyBinCount;
+        const data = new Uint8Array(buf);
+        analyserRef.current.getByteFrequencyData(data);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        const barWidth = (canvas.width / bufferLength) * 2.5;
+        const bw = (canvas.width / buf) * 2.5;
         let x = 0;
-
-        for (let i = 0; i < bufferLength; i++) {
-          const barHeight = (dataArray[i] / 255) * canvas.height;
-          ctx.fillStyle = '#4f46e5';
-          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-          x += barWidth + 1;
+        for (let i = 0; i < buf; i++) {
+          const bh = (data[i] / 255) * canvas.height;
+          ctx.fillStyle = '#2563eb';
+          ctx.fillRect(x, canvas.height - bh, bw, bh);
+          x += bw + 1;
         }
       } else {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = '#cbd5e1';
+        ctx.fillStyle = '#d1d5db';
         ctx.fillRect(0, canvas.height / 2 - 1, canvas.width, 2);
       }
       animId = requestAnimationFrame(draw);
     };
-
     draw();
     return () => cancelAnimationFrame(animId);
   }, [isListening]);
@@ -83,12 +76,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       if (sourceType === 'tab') {
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-            suppressLocalAudioPlayback: false
-          }
+          audio: { echoCancellation: true, noiseSuppression: true, suppressLocalAudioPlayback: false }
         });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -100,18 +88,17 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         setHasAudioTrack(false);
-        setErrorMessage('⚠️ No audio track found! When selecting a tab in Chrome, make sure to check "Share tab audio".');
+        setErrorMessage('No audio track found. In Chrome, make sure to check "Share tab audio" when selecting a tab.');
         stream.getTracks().forEach(t => t.stop());
         return;
       }
 
       const track = audioTracks[0];
       setHasAudioTrack(true);
-      setTrackLabel(track.label || (sourceType === 'tab' ? 'Chrome Tab Audio' : 'Microphone Input'));
+      setTrackLabel(track.label || (sourceType === 'tab' ? 'Chrome Tab Audio' : 'Microphone'));
       streamRef.current = stream;
 
       const audioOnlyStream = new MediaStream(audioTracks);
-
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioContextRef.current = audioCtx;
       const source = audioCtx.createMediaStreamSource(audioOnlyStream);
@@ -123,9 +110,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
         const recorder = new MediaRecorder(audioOnlyStream, { mimeType: 'audio/webm;codecs=opus' });
         recorder.ondataavailable = (e) => {
-          if (e.data.size > 0 && onAudioChunk) {
-            onAudioChunk(e.data);
-          }
+          if (e.data.size > 0 && onAudioChunk) onAudioChunk(e.data);
         };
         recorder.start(250);
         mediaRecorderRef.current = recorder;
@@ -145,96 +130,93 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
   };
 
   const stopListening = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop());
-      streamRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-    if (speechRecognitionRef.current) {
-      try { speechRecognitionRef.current.stop(); } catch (e) {}
-    }
+    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+    audioContextRef.current?.close();
+    audioContextRef.current = null;
+    try { speechRecognitionRef.current?.stop(); } catch (e) {}
     setIsListening(false);
     setHasAudioTrack(null);
   };
 
   return (
-    <div className="clean-card p-5">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Volume2 className="w-5 h-5 text-indigo-600" />
-            <h3 className="font-heading text-base font-bold text-slate-900">Live Audio Capture</h3>
-            {isListening ? (
-              <span className="pill-badge pill-badge-green">LISTENING LIVE</span>
-            ) : (
-              <span className="pill-badge pill-badge-amber">STANDBY</span>
-            )}
-          </div>
-          <p className="text-xs text-slate-600">
-            Captures interviewer speech directly from Chrome tab (Google Meet, Zoom, YouTube) or Microphone.
-          </p>
-        </div>
-
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="bg-slate-100 p-1 rounded-lg border border-slate-200 flex items-center gap-1">
-            <button
-              onClick={() => { if (!isListening) setSourceType('tab'); }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                sourceType === 'tab' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Monitor className="w-3.5 h-3.5" /> Tab Audio
-            </button>
-            <button
-              onClick={() => { if (!isListening) setSourceType('mic'); }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                sourceType === 'mic' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Mic className="w-3.5 h-3.5" /> Mic Input
-            </button>
-          </div>
-
-          {!isListening ? (
-            <button onClick={startListening} className="btn-primary">
-              <Volume2 className="w-4 h-4" /> Start Listening
-            </button>
-          ) : (
-            <button onClick={stopListening} className="btn-danger">
-              Stop Capture
-            </button>
-          )}
-        </div>
-      </div>
-
-      <canvas ref={canvasRef} className="waveform-canvas mb-2" width={600} height={40} />
-
-      <div className="flex items-center justify-between text-xs text-slate-500">
-        <div>
-          {hasAudioTrack === true && (
-            <span className="text-emerald-700 flex items-center gap-1 font-semibold">
-              <CheckCircle className="w-3.5 h-3.5" /> Active Track: {trackLabel}
+    <div className="card">
+      <div className="card-header">
+        <div className="card-title">
+          <Volume2 />
+          Audio Capture
+          {isListening ? (
+            <span className="badge badge-red">
+              <div className="status-dot live" />
+              LIVE
             </span>
+          ) : (
+            <span className="badge badge-gray">IDLE</span>
           )}
         </div>
-        <div className="flex items-center gap-1 text-slate-500">
-          <ExternalLink className="w-3 h-3 text-indigo-600" />
-          <span>Keep Copilot open side-by-side or read on your phone!</span>
+
+        {/* Source Toggle */}
+        <div className="source-toggle">
+          <button
+            className={`source-toggle-btn ${sourceType === 'tab' ? 'active' : ''}`}
+            onClick={() => { if (!isListening) setSourceType('tab'); }}
+            disabled={isListening}
+          >
+            <Monitor />
+            Tab
+          </button>
+          <button
+            className={`source-toggle-btn ${sourceType === 'mic' ? 'active' : ''}`}
+            onClick={() => { if (!isListening) setSourceType('mic'); }}
+            disabled={isListening}
+          >
+            <Mic />
+            Mic
+          </button>
         </div>
       </div>
 
-      {errorMessage && (
-        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-xs flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0" />
-          <span>{errorMessage}</span>
-        </div>
-      )}
+      <div className="card-body">
+        <p style={{ fontSize: 12, color: 'var(--gray-500)', marginBottom: 12 }}>
+          {sourceType === 'tab'
+            ? 'Captures interviewer audio from a browser tab (Google Meet, Zoom, etc.). Enable "Share tab audio" in Chrome.'
+            : 'Captures audio from your microphone for voice input.'}
+        </p>
+
+        <canvas ref={canvasRef} className="waveform-canvas" width={600} height={36} />
+
+        {hasAudioTrack === true && (
+          <div className="alert alert-success" style={{ marginTop: 10 }}>
+            <CheckCircle />
+            <span>Active: <strong>{trackLabel}</strong></span>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div className="alert alert-error" style={{ marginTop: 10 }}>
+            <AlertCircle />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="card-footer">
+        <span style={{ fontSize: 11, color: 'var(--gray-400)' }}>
+          {sourceType === 'tab' ? 'Tab Audio' : 'Microphone'} · Web Speech API fallback enabled
+        </span>
+        {!isListening ? (
+          <button className="btn btn-primary" onClick={startListening}>
+            <Volume2 size={13} />
+            Start Listening
+          </button>
+        ) : (
+          <button className="btn btn-danger" onClick={stopListening}>
+            <StopCircle size={13} />
+            Stop Capture
+          </button>
+        )}
+      </div>
     </div>
   );
 }
