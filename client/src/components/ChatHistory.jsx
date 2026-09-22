@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   User, Sparkles, Zap, AlertCircle, CheckCircle, Clock,
-  ArrowDown, RefreshCw, Copy, Check, ChevronDown, Edit2, AlertTriangle, Mic, ShieldAlert
+  ArrowDown, RefreshCw, Copy, Check, ChevronDown, Edit2, AlertTriangle
 } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -253,84 +253,7 @@ function QuestionBubble({ msg, onEditQuestion }) {
   );
 }
 
-function CandidateBubble({ msg, onHelpContinue }) {
-  const [copied, setCopied] = useState(false);
-
-  const copyText = () => {
-    navigator.clipboard.writeText(msg.text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1200);
-  };
-
-  return (
-    <div className="chat-msg chat-msg-candidate" style={{ marginBottom: 12 }}>
-      <div className="chat-msg-header">
-        <div className="chat-role-label" style={{ color: '#059669', display: 'flex', alignItems: 'center', gap: 5 }}>
-          <Mic size={13} style={{ color: '#10b981' }} />
-          <span>You (Spoken)</span>
-          {msg.isProvisional && (
-            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 5px', marginLeft: 4 }}>
-              Interrupted / Partial
-            </span>
-          )}
-          {msg.isEchoLeakage && (
-            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 5px', marginLeft: 4 }} title="Audio closely matched meeting speaker; potential leakage">
-              ⚠️ Echo Flagged
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span className="badge badge-green" style={{ fontSize: 9, background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-            Candidate Speech
-          </span>
-          {msg.createdAt && (
-            <span style={{ fontSize: 10, color: 'var(--gray-400)', fontFamily: 'JetBrains Mono, monospace' }}>
-              {new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="chat-bubble-candidate">
-        <div className="candidate-text">
-          "{msg.text}"
-        </div>
-      </div>
-
-      <div className="chat-msg-footer" style={{ marginTop: 4 }}>
-        {onHelpContinue && (
-          <button
-            className="btn btn-secondary"
-            style={{
-              fontSize: 11,
-              padding: '3px 9px',
-              color: '#047857',
-              borderColor: '#a7f3d0',
-              background: '#f0fdf4',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4
-            }}
-            onClick={() => onHelpContinue(msg.parentId)}
-            title="Get AI suggestions on what to say next based on your spoken answer"
-          >
-            <Sparkles size={11} />
-            Help Me Continue
-          </button>
-        )}
-        <button
-          className="btn btn-ghost"
-          style={{ fontSize: 11, padding: '3px 8px', marginLeft: 'auto' }}
-          onClick={copyText}
-        >
-          {copied ? <Check size={11} /> : <Copy size={11} />}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion, onHelpContinue }) {
+function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
   const [copied, setCopied] = useState(false);
 
   const copyText = () => {
@@ -341,10 +264,6 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion, onHelpC
 
   if (msg.role === 'question') {
     return <QuestionBubble msg={msg} onEditQuestion={onEditQuestion} />;
-  }
-
-  if (msg.role === 'candidate') {
-    return <CandidateBubble msg={msg} onHelpContinue={onHelpContinue} />;
   }
 
   // Answer message
@@ -431,7 +350,7 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion, onHelpC
 // ─────────────────────────────────────────────────────────────
 //  Chat History container
 // ─────────────────────────────────────────────────────────────
-export default function ChatHistory({ messages, onContinue, onExplainMore, onEditQuestion, onHelpContinue }) {
+export default function ChatHistory({ messages, onContinue, onExplainMore, onEditQuestion }) {
   const containerRef = useRef(null);
   const bottomRef = useRef(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -501,7 +420,6 @@ export default function ChatHistory({ messages, onContinue, onExplainMore, onEdi
             onContinue={onContinue}
             onExplainMore={onExplainMore}
             onEditQuestion={onEditQuestion}
-            onHelpContinue={onHelpContinue}
           />
         ))}
         <div ref={bottomRef} />

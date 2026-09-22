@@ -137,65 +137,15 @@ function MobileQuestionCard({ msg, onEditQuestion }) {
   );
 }
 
-function MobileCandidateCard({ msg, onHelpContinue }) {
-  return (
-    <div className="mobile-chat-candidate">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 10, fontWeight: 700, color: '#047857', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Mic size={11} style={{ color: '#10b981' }} /> You (Spoken)
-          </span>
-          {msg.isProvisional && (
-            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 4px' }}>
-              Partial
-            </span>
-          )}
-          {msg.isEchoLeakage && (
-            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 4px' }} title="Matches recent meeting audio">
-              Echo
-            </span>
-          )}
-        </div>
-        {onHelpContinue && (
-          <button
-            onClick={() => onHelpContinue(msg.parentId)}
-            style={{
-              background: '#ffffff',
-              border: '1px solid #a7f3d0',
-              color: '#047857',
-              fontSize: 10,
-              fontWeight: 600,
-              borderRadius: 5,
-              padding: '2px 7px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              cursor: 'pointer'
-            }}
-          >
-            <Sparkles size={10} /> Continue
-          </button>
-        )}
-      </div>
-
-      <div style={{ fontSize: 13, fontWeight: 500, color: '#14532d', lineHeight: 1.5 }}>
-        "{msg.text}"
-      </div>
-    </div>
-  );
-}
-
 export default function MobileView({
   wsConnected,
   sessionId,
   messages = [],
   isPaused,
   displayTranscript = '',
-  candidateInterim = '',
   onAudioChunk,
   onTriggerAnswer,
   onExplainMore,
-  onHelpContinue,
   onClear,
   onTogglePause,
   onJoinSession,
@@ -391,24 +341,7 @@ export default function MobileView({
           </div>
         )}
 
-        {/* Candidate Live Speech Indicator Card */}
-        {candidateInterim && (
-          <div className="mobile-live-transcript-card" style={{ borderLeft: '3px solid #10b981', background: '#f0fdf4' }}>
-            <div className="mobile-live-header">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div className="status-dot live" style={{ background: '#10b981' }} />
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#047857', letterSpacing: '0.05em', textTransform: 'uppercase' }}>
-                  You Are Speaking (Mic)
-                </span>
-              </div>
-            </div>
-            <div className="mobile-live-body" style={{ color: '#14532d' }}>
-              "{candidateInterim}"
-            </div>
-          </div>
-        )}
-
-        {messages.length === 0 && !displayTranscript && !candidateInterim && (
+        {messages.length === 0 && !displayTranscript && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 40, textAlign: 'center' }}>
             <Sparkles size={28} style={{ color: 'var(--gray-300)' }} />
             <div style={{ fontSize: 14, color: 'var(--gray-500)', fontWeight: 500 }}>Ready for Live Answers</div>
@@ -425,16 +358,6 @@ export default function MobileView({
                 key={msg.id}
                 msg={msg}
                 onEditQuestion={onEditQuestion}
-              />
-            );
-          }
-
-          if (msg.role === 'candidate') {
-            return (
-              <MobileCandidateCard
-                key={msg.id}
-                msg={msg}
-                onHelpContinue={onHelpContinue}
               />
             );
           }
@@ -483,16 +406,6 @@ export default function MobileView({
         >
           <Zap size={16} />
           Answer
-        </button>
-
-        <button
-          className="mobile-action-btn"
-          style={{ background: '#ecfdf5', borderColor: '#a7f3d0', color: '#047857' }}
-          onClick={() => onHelpContinue && onHelpContinue(latestQuestion?.id)}
-          title="Suggest next point based on your spoken answer"
-        >
-          <Sparkles size={16} />
-          Continue
         </button>
 
         <button className="mobile-action-btn amber" onClick={onExplainMore}>

@@ -28,68 +28,49 @@ const hashText = t => crypto.createHash('sha1').update(t.trim().toLowerCase()).d
 // ─────────────────────────────────────────────────────────────
 //  Global candidate context (per-deployment default)
 // ─────────────────────────────────────────────────────────────
-//  100+ Technical Keywords (PySpark, Big Data, SQL, System Design, Cloud)
-// ─────────────────────────────────────────────────────────────
-const DEFAULT_100_TECHNICAL_KEYWORDS = [
-  // 1. PySpark & Distributed Computing
-  'PySpark', 'coalesce', 'repartition', 'broadcast join', 'shuffle join', 'partition projection',
-  'dense_rank', 'row_number', 'DataFrame', 'RDD', 'Spark SQL', 'Catalyst Optimizer',
-  'Tungsten Engine', 'Spark Submit', 'Driver Memory', 'Executor Memory', 'Executor Cores',
-  'Dynamic Allocation', 'Spill to Disk', 'Skew Join', 'Salt Key', 'Broadcast Hash Join',
-  'Sort Merge Join', 'Shuffle Hash Join', 'Accumulator', 'Broadcast Variable', 'DAG',
-  'Lineage Graph', 'Wide Transformation', 'Narrow Transformation', 'Watermarking',
-  'Structured Streaming', 'Checkpointing', 'Write-Ahead Log', 'Shuffle Partition',
-  // 2. Storage, Formats & Lakes
-  'Delta Lake', 'Parquet', 'ORC', 'Snappy', 'Gzip', 'Columnar Storage', 'Predicate Pushdown',
-  'Projection Pruning', 'Schema Registry', 'Avro', 'Data Lakehouse', 'Medallion Architecture',
-  'Bronze Layer', 'Silver Layer', 'Gold Layer', 'Data Vault', 'Data Mesh', 'dbt',
-  // 3. Databases, Warehouses & Analytics Engines
-  'Databricks', 'AWS Athena', 'AWS Redshift', 'Redshift Spectrum', 'S3 Select',
-  'Snowflake', 'Virtual Warehouse', 'Micro-partitions', 'Clustering Key',
-  'PostgreSQL', 'MySQL', 'Redis', 'Cassandra', 'DynamoDB', 'Presto', 'Trino', 'Hive Metastore',
-  // 4. Data Modeling & SQL
-  'Star Schema', 'Snowflake Schema', 'Slowly Changing Dimension', 'SCD Type 1', 'SCD Type 2',
-  'Fact Table', 'Dimension Table', 'Surrogate Key', 'OLAP', 'OLTP', 'ACID', 'WAL',
-  'Window Functions', 'LAG', 'LEAD', 'NTILE', 'CUME_DIST', 'CTE', 'Recursive CTE',
-  'Explain Plan', 'Cost-Based Optimizer', 'Partition By', 'Cluster By', 'B-Tree Index', 'Hash Index',
-  // 5. Streaming, CDC & Orchestration
-  'Apache Kafka', 'Kafka Topic', 'Consumer Group', 'Partition Offset', 'Exactly Once',
-  'At Least Once', 'At Most Once', 'Debezium', 'CDC', 'Change Data Capture',
-  'Apache Airflow', 'Airflow DAG', 'Operator', 'Sensor', 'Backfill', 'XComs', 'Celery Executor',
-  // 6. Backend, Cloud & System Design
-  'Kubernetes', 'Docker', 'WebSockets', 'GraphQL', 'TypeScript', 'Node.js',
-  'CAP Theorem', 'Eventual Consistency', 'Idempotency', 'Load Balancer', 'Reverse Proxy',
-  'Rate Limiting', 'Microservices', 'Out of Memory', 'Garbage Collection',
-  // 7. Core Algorithms & Patterns
-  'palindrome', 'two pointer', 'sliding window', 'binary search', 'dynamic programming',
-  'depth first search', 'breadth first search', 'memoization', 'in-place'
-];
-
 const candidateContext = {
-  resume: "Senior Full Stack & Data Engineer with 5+ years building distributed data pipelines in PySpark, Databricks, Delta Lake, AWS (Athena, Redshift, S3), Kafka, and scalable Node.js/React applications.",
+  resume: "Senior Full Stack Software Engineer with 5+ years in React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks, and AI integrations.",
   targetRole: "Senior Data / Full Stack Engineer",
   jobDescription: "Build low-latency real-time applications, large-scale data pipelines with PySpark and Databricks, scale Node.js services, design clean UIs, work with LLM APIs.",
   projects: "1. Real-time Audio Analytics Platform: WebSockets, Node.js pipelines, React dashboard.\n2. Data Lakehouse Architecture: PySpark, Delta Lake, Databricks, Redshift, Athena for 10TB+ daily telemetry.",
   guardrails: "Use only verified candidate facts. For missing experience, give industry best-practice answer and note candidate familiarity. Never invent metrics, employers, or results.",
-  language: "English",
-  keywords: [...DEFAULT_100_TECHNICAL_KEYWORDS]
+  language: "English"
 };
 
-const technicalVocabulary = new Set(DEFAULT_100_TECHNICAL_KEYWORDS);
+// ─────────────────────────────────────────────────────────────
+//  Technical Vocabulary & Deepgram Keyterm Prompting
+// ─────────────────────────────────────────────────────────────
+const technicalVocabulary = new Set([
+  // Core Data & Big Data Engineering
+  'PySpark', 'coalesce', 'repartition', 'Databricks', 'Athena', 'Redshift',
+  'broadcast join', 'shuffle join', 'partition projection', 'dense_rank', 'row_number',
+  'DataFrame', 'RDD', 'Spark SQL', 'MapReduce', 'Hadoop', 'Parquet', 'Delta Lake',
+  // Common backend & distributed systems
+  'Kafka', 'PostgreSQL', 'Redis', 'WebSockets', 'GraphQL', 'Docker', 'Kubernetes',
+  // Key algorithmic concepts
+  'palindrome', 'two pointer', 'sliding window', 'binary search', 'dynamic programming',
+  'depth first search', 'breadth first search', 'memoization', 'in-place',
+  // Phonetically tricky terms
+  'asynchronous', 'concurrency', 'idempotent', 'polymorphism', 'encapsulation',
+  'microservices', 'load balancer', 'sharding', 'replication'
+]);
 
 function getTechnicalVocabularyList() {
   const list = new Set(technicalVocabulary);
-  if (Array.isArray(candidateContext.keywords)) {
-    candidateContext.keywords.forEach(k => {
-      if (typeof k === 'string' && k.trim()) list.add(k.trim());
+  if (candidateContext.resume) {
+    candidateContext.resume.split(/[,.\n;()]+/).forEach(token => {
+      const trimmed = token.trim();
+      if (trimmed.length > 2 && trimmed.length < 35 && !/^(with|years?|in|and|for|the|of|to)\b/i.test(trimmed)) {
+        list.add(trimmed);
+      }
     });
   }
   return Array.from(list);
 }
 
 // Critical words classification for word-level confidence checking
-const NEGATION_WORDS = new Set(['not', 'never', 'no', 'without', 'neither', 'nor', 'dont', 'doesnt', 'cant', 'isnt', 'wont']);
-const COMPARISON_WORDS = new Set(['difference', 'versus', 'vs', 'ascending', 'descending', 'in-place', 'recursive', 'iterative', 'higher', 'lower']);
+const NEGATION_WORDS = new Set(['not', 'never', 'no', 'without', 'neither', 'nor']);
+const COMPARISON_WORDS = new Set(['difference', 'versus', 'vs', 'ascending', 'descending', 'in-place', 'recursive', 'iterative']);
 
 function analyzeWordUncertainty(wordsArray, vocabSet) {
   if (!Array.isArray(wordsArray) || wordsArray.length === 0) {
@@ -126,22 +107,33 @@ function analyzeWordUncertainty(wordsArray, vocabSet) {
   };
 }
 
-// Token Jaccard similarity for acoustic echo / microphone leakage detection
-function calculateTextSimilarity(str1, str2) {
-  const set1 = new Set((str1 || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean));
-  const set2 = new Set((str2 || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean));
-  if (set1.size === 0 || set2.size === 0) return 0;
-  let intersection = 0;
-  for (const s of set1) {
-    if (set2.has(s)) intersection++;
-  }
-  const union = new Set([...set1, ...set2]).size;
-  return union === 0 ? 0 : intersection / union;
-}
-
 // ─────────────────────────────────────────────────────────────
 //  Session store: sessionId → ConversationSession
 // ─────────────────────────────────────────────────────────────
+/*
+  ConversationSession {
+    laptopWs: WebSocket | null
+    mobileWss: Set<WebSocket>
+    messages: ChatMessage[]          ← append-only
+    activeReqId: string | null       ← current generation request
+    activeAbort: AbortController | null
+    transcriptAccumulator: TranscriptAccumulator
+    seenTranscriptHashes: Set<string>
+    pendingQuestionHash: string | null
+  }
+
+  ChatMessage {
+    id: string
+    role: 'question' | 'answer'
+    text: string
+    status: 'pending'|'streaming'|'complete'|'interrupted'|'error'
+    parentId: string | null          ← for answers: linked question id
+    reqId: string | null             ← generation request
+    ttft: number
+    totalTime: number
+    createdAt: number
+  }
+*/
 const sessions = new Map();
 
 function getOrCreateSession(sessionId) {
@@ -152,20 +144,9 @@ function getOrCreateSession(sessionId) {
       messages: [],
       activeReqId: null,
       activeAbort: null,
-      // Dual accumulators for independent transcription
-      interviewerAccumulator: new TranscriptAccumulator(sessionId),
-      candidateAccumulator: new CandidateAccumulator(sessionId),
-      // Dual Deepgram socket tracking per session
-      interviewerDeepgramWs: null,
-      candidateDeepgramWs: null,
-      interviewerQueue: [],
-      candidateQueue: [],
-      interviewerSocketEpoch: Date.now(),
-      candidateSocketEpoch: Date.now(),
-      recentInterviewerUtterances: [], // For leakage detection
+      transcriptAccumulator: new TranscriptAccumulator(sessionId),
       seenTranscriptHashes: new Set(),
       pendingQuestionHash: null,
-      cleanupTimer: null
     });
   }
   return sessions.get(sessionId);
@@ -203,7 +184,7 @@ class TranscriptAccumulator {
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle after 1.4s of quiet
-    this.WINDOW_MS = 7000;    // 7-second question accumulation window
+    this.WINDOW_MS = 5000;    // 5-second question accumulation window
   }
 
   isIncomplete(text) {
@@ -240,7 +221,7 @@ class TranscriptAccumulator {
     const elapsed = Date.now() - this.speechStartTime;
 
     if (speechFinal) {
-      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to 7s window
+      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to 5s window
       if (this.isIncomplete(this.committed)) {
         const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
         this._scheduleSettle(remaining);
@@ -281,7 +262,7 @@ class TranscriptAccumulator {
     this.settleTimer = setTimeout(() => {
       const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
 
-      // If trailing word is a preposition/connector and within the 7s speech window, wait longer!
+      // If trailing word is a preposition/connector and within the 5s speech window, wait longer!
       if (this.isIncomplete(full)) {
         const elapsed = this.speechStartTime ? Date.now() - this.speechStartTime : 0;
         if (elapsed < this.WINDOW_MS) {
@@ -311,204 +292,92 @@ class TranscriptAccumulator {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  CandidateAccumulator
-//  Collects candidate microphone speech (spoken answers & clarifications)
-//  Does NOT trigger automated AI generation!
-// ─────────────────────────────────────────────────────────────
-class CandidateAccumulator {
-  constructor(sessionId) {
-    this.sessionId = sessionId;
-    this.committed = '';
-    this.interim = '';
-    this.words = [];
-    this.settleTimer = null;
-    this.speechStartTime = null;
-    this.SETTLE_MS = 1400;
-  }
-
-  addInterim(text) {
-    if (!this.speechStartTime) this.speechStartTime = Date.now();
-    this.interim = text;
-    this._scheduleSettle(this.SETTLE_MS);
-  }
-
-  addFinal(text, speechFinal, words = []) {
-    if (!this.speechStartTime) this.speechStartTime = Date.now();
-    if (Array.isArray(words) && words.length > 0) {
-      this.words.push(...words);
-    }
-    this.committed = this.committed ? this.committed.trimEnd() + ' ' + text.trim() : text.trim();
-    this.interim = '';
-
-    if (speechFinal) {
-      this._clearSettle();
-      return this._commit();
-    } else {
-      this._scheduleSettle(this.SETTLE_MS);
-    }
-    return null;
-  }
-
-  forceCommitProvisional() {
-    this._clearSettle();
-    const result = this._commit();
-    if (result) {
-      const session = sessions.get(this.sessionId);
-      if (session) commitCandidateSpeech(this.sessionId, result.text, session, result.words, result.startTime, result.endTime, true);
-    }
-  }
-
-  _commit() {
-    const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
-    const words = [...this.words];
-    const startTime = this.speechStartTime || Date.now();
-    const endTime = Date.now();
-
-    this.committed = '';
-    this.interim = '';
-    this.words = [];
-    this.speechStartTime = null;
-
-    if (!full || NOISE_ONLY.test(full)) return null;
-    return { text: full, words, startTime, endTime };
-  }
-
-  _scheduleSettle(ms) {
-    this._clearSettle();
-    this.settleTimer = setTimeout(() => {
-      const result = this._commit();
-      if (result) {
-        const session = sessions.get(this.sessionId);
-        if (session) commitCandidateSpeech(this.sessionId, result.text, session, result.words, result.startTime, result.endTime, false);
-      }
-    }, ms || this.SETTLE_MS);
-  }
-
-  _clearSettle() {
-    if (this.settleTimer) {
-      clearTimeout(this.settleTimer);
-      this.settleTimer = null;
-    }
-  }
-}
-
-function commitCandidateSpeech(sessionId, text, session, words = [], startTime = Date.now(), endTime = Date.now(), isProvisional = false) {
-  const trimmed = text.trim();
-  if (!trimmed) return;
-
-  // Echo / Leakage detection against recent interviewer utterances
-  let isEchoLeakage = false;
-  const now = Date.now();
-  const recentInterviewer = (session.recentInterviewerUtterances || []).filter(u => now - u.timestamp < 4000);
-  for (const item of recentInterviewer) {
-    const sim = calculateTextSimilarity(trimmed, item.text);
-    if (sim > 0.85) {
-      isEchoLeakage = true;
-      break;
-    }
-  }
-
-  const cMsgId = uid('c');
-  const analysis = analyzeWordUncertainty(words, technicalVocabulary);
-
-  const cMsg = {
-    id: cMsgId,
-    role: 'candidate',
-    text: trimmed,
-    uncertainWords: analysis.uncertainWords,
-    isEchoLeakage,
-    isProvisional,
-    startTime,
-    endTime,
-    createdAt: now
-  };
-
-  session.messages.push(cMsg);
-
-  broadcastToSession(sessionId, {
-    type: 'candidate_speech_final',
-    msgId: cMsgId,
-    text: trimmed,
-    uncertainWords: analysis.uncertainWords,
-    isEchoLeakage,
-    isProvisional,
-    startTime,
-    endTime,
-    createdAt: now,
-    sessionId
-  });
-}
-
-// ─────────────────────────────────────────────────────────────
-//  Context builder — 3 roles (Interviewer, Candidate Spoken, AI Suggestion)
+//  Context builder — relevant history only, not full transcript
 // ─────────────────────────────────────────────────────────────
 function buildContext(session, currentQuestion) {
   const messages = session.messages;
-  const recent = messages.slice(-10); // last 10 messages across all 3 roles
+  const recent = messages.slice(-6); // last 3 Q+A pairs max
 
-  const structuredHistory = recent.map(m => {
-    let speakerLabel = 'Interviewer';
-    if (m.role === 'candidate') speakerLabel = 'Candidate (Spoken Answer)';
-    else if (m.role === 'answer') speakerLabel = 'AI Copilot (Suggestion - not spoken)';
+  // Detect follow-up by checking latest question for referential phrases
+  const followUpPatterns = [
+    /^(why|how|give (me )?an example|what about|can you (optimize|improve)|explain (the )?(second|first|third|that)|use \w+ instead|what happens|how is that different)/i,
+    /^(and|but|also|additionally|what if|now|so|that|this|those|these)\b/i,
+  ];
+  const isFollowUp = followUpPatterns.some(p => p.test(currentQuestion.trim()));
 
-    return {
-      role: m.role,
-      speaker: speakerLabel,
-      text: m.text.slice(0, 800),
-      isEcho: m.isEchoLeakage || false
-    };
-  });
-
-  // Find candidate's latest spoken statement for follow-up resolution
-  const candidateSpeeches = messages.filter(m => m.role === 'candidate');
-  const latestCandidateSpeech = candidateSpeeches.length > 0 ? candidateSpeeches[candidateSpeeches.length - 1].text : null;
+  // Find parent question/answer for context
+  let parentQuestion = null;
+  let parentAnswer = null;
+  if (isFollowUp && messages.length >= 2) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'answer' && messages[i].status === 'complete') {
+        parentAnswer = messages[i];
+        // Find the question for this answer
+        const qMsg = messages.find(m => m.id === messages[i].parentId);
+        if (qMsg) parentQuestion = qMsg;
+        break;
+      }
+    }
+  }
 
   return {
     currentQuestion,
-    recentHistory: structuredHistory,
-    latestCandidateSpeech,
-    candidate: candidateContext
+    isFollowUp,
+    parentQuestion: parentQuestion?.text || null,
+    parentAnswer: parentAnswer?.text || null,
+    recentHistory: recent.map(m => ({ role: m.role, text: m.text.slice(0, 600), status: m.status })),
+    candidate: candidateContext,
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-//  System prompt — Grounded in Candidate Spoken Answer
+//  System prompt — simpler & shorter code, neat logic below, edge cases
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, recentHistory, latestCandidateSpeech } = ctx;
+  const { candidate, parentQuestion, parentAnswer, isFollowUp } = ctx;
 
-  let candidateSpokenContext = '';
-  if (latestCandidateSpeech) {
-    candidateSpokenContext = `
-CANDIDATE'S LATEST ACTUAL SPOKEN WORDS (GROUND TRUTH):
-"${latestCandidateSpeech}"
-`;
+  let followUpSection = '';
+  if (isFollowUp && parentQuestion) {
+    followUpSection = `
+PREVIOUS QUESTION: ${parentQuestion}
+PREVIOUS ANSWER SUMMARY: ${parentAnswer ? parentAnswer.slice(0, 500) : '(still generating)'}
+This is a follow-up. Continue the relevant discussion without repeating the entire previous answer.
+If the reference is genuinely ambiguous, ask ONE concise clarification question.`;
   }
 
-  return `You are an elite real-time AI Interview Copilot for a Senior Data & Full Stack Engineer.
+  return `You are a real-time interview response assistant designed to help candidates answer with confidence and clarity.
 
-CRITICAL INSTRUCTIONS ON ROLES & GROUND TRUTH:
-1. The conversation history contains three distinct roles:
-   - [Interviewer]: The interviewer asking questions or follow-ups.
-   - [Candidate (Spoken Answer)]: What the candidate ACTUALLY SPOKE out loud. This is the GROUND TRUTH of what has been communicated to the interviewer.
-   - [AI Copilot (Suggestion)]: Previous suggestions you provided. The candidate may or may not have used them. NEVER assume the candidate said them unless it appears in [Candidate (Spoken Answer)].
-2. REFERENCE RESOLUTION:
-   - When the interviewer asks short follow-ups like "Why?", "Can you explain that?", "What about edge cases?", "Why not repartition?", resolve the reference based on what the [Candidate (Spoken Answer)] actually stated.
-3. CONCISE TECHNICAL CORRECTION:
-   - If the candidate's spoken answer contains an apparent technical mistake (e.g. claiming coalesce increases partitions, confusing rank with dense_rank, or inverted complexity), provide the correction smoothly and concisely in the answer so the candidate can gracefully self-correct.
-4. CODING & ANSWER FORMAT:
-   - Direct, crisp, high-impact answer first.
-   - If code is requested:
-     * Provide the SHORTEST, SIMPLEST, most elegant code possible.
-     * Wrap in markdown code fences (\`\`\`language ... \`\`\`).
-     * Follow with 2-3 neat bullet points explaining the core logic, time/space complexity, and key edge cases handled.
-   - Do NOT repeat what the candidate already said.${candidateSpokenContext}
+Answer the latest complete interviewer question using the provided conversation context.
 
-CANDIDATE PROFILE & TECHNICAL BACKGROUND:
+CANDIDATE PROFILE:
 - Target Role: ${candidate.targetRole}
 - Résumé: ${candidate.resume}
 - Projects: ${candidate.projects}
-- Rules: ${candidate.guardrails}`;
+- Job Description: ${candidate.jobDescription}
+- Rules: ${candidate.guardrails}
+- Language preference: ${candidate.language || 'English'}
+${followUpSection}
+
+CRITICAL CODING RESPONSE RULES (STRICT):
+When answering any coding task or algorithm question, ALWAYS format your answer in this exact clean structure:
+1. **Core Approach (1-2 sentences)**: State the direct strategy (e.g., "Use a hash map to store seen values in a single pass.").
+2. **Simple & Short Code**:
+   - Provide the SHORTEST, SIMPLEST, and most elegant code possible.
+   - Do NOT include unnecessary boilerplate, wrappers, or boilerplate imports unless required.
+   - Write clean, modern, readable code.
+   - Always wrap code in markdown code fences (\`\`\`language ... \`\`\`).
+3. **### How It Works**:
+   - 2-3 neat, simple bullet points explaining the logic clearly step-by-step below the code.
+4. **### Edge Cases & Complexity**:
+   - List key edge cases handled (e.g., empty/null input, single element, negative numbers, boundaries).
+   - Time Complexity: O(...) | Space Complexity: O(...) with 1-line rationale.
+
+GENERAL RESPONSE RULES:
+1. Begin with a direct, useful sentence. Never start with "Certainly!", "Great question!", or "Here is the code."
+2. Keep answers concise, natural, and comfortable to read aloud in an interview setting.
+3. For definitions/concepts: state what it is, why it's used, and a quick practical example.
+4. For behavioral/experience: use ONLY verified résumé/project facts. Do not invent fake metrics or employers.
+5. For follow-up questions: address the specific follow-up directly without repeating earlier answers.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -545,8 +414,8 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
 
-  // ── 7-Second Stitching & Follow-up Completion Rule ──
-  // If a question was committed within the last 7 seconds, and:
+  // ── 5-Second Stitching & Follow-up Completion Rule ──
+  // If a question was committed within the last 5 seconds, and:
   // (a) the previous question was incomplete (e.g. ended with "for", "to", "in")
   // (b) OR the new text is a short completion fragment (<= 4 words, e.g. "palindrome", "in python")
   // stitch them together instead of creating two fragmented answers!
@@ -557,7 +426,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const wasIncomplete = lastQ && INCOMPLETE_PHRASES.some(re => re.test(lastQ.text));
   const isShortFragment = wordCount <= 4 && !/^(what|why|how|explain|can you|write|implement)\b/i.test(trimmed);
 
-  if (lastQ && timeSinceLastQ < 7000 && (wasIncomplete || isShortFragment)) {
+  if (lastQ && timeSinceLastQ < 5000 && (wasIncomplete || isShortFragment)) {
     // Abort previous partial answer
     if (session.activeAbort) {
       session.activeAbort.abort();
@@ -880,139 +749,6 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Help Me Continue Streamer — Guides candidate based on what they already spoke
-// ─────────────────────────────────────────────────────────────
-async function streamHelpContinue(sessionId, question, candidateSpokenText, questionMsgId, session) {
-  const reqId = uid('req');
-  const aMsgId = uid('a');
-  const startTime = Date.now();
-
-  const abort = new AbortController();
-  session.activeAbort = abort;
-  session.activeReqId = reqId;
-
-  const aMsg = {
-    id: aMsgId,
-    role: 'answer',
-    text: '',
-    status: 'streaming',
-    parentId: questionMsgId,
-    reqId,
-    ttft: 0,
-    totalTime: 0,
-    createdAt: Date.now()
-  };
-  session.messages.push(aMsg);
-
-  broadcastToSession(sessionId, {
-    type: 'chat_message',
-    msgId: aMsgId,
-    parentId: questionMsgId,
-    reqId,
-    role: 'answer',
-    text: '',
-    status: 'streaming',
-    sessionId
-  });
-
-  const ctx = buildContext(session, question);
-  const systemPrompt = buildSystemPrompt(ctx);
-  const userContent = `The interviewer asked: "${question}"
-The candidate has already spoken: "${candidateSpokenText || '(Candidate started answering)'}"
-
-Suggest the NEXT 2-3 logical talking points or code steps to help the candidate continue and conclude the answer strongly.
-Do NOT repeat anything the candidate already said. Jump straight into the continuation.`;
-
-  const groqKey = process.env.GROQ_API_KEY;
-  if (!groqKey) {
-    await streamMockAnswer(sessionId, `Continue: ${question}`, aMsgId, reqId, startTime, abort.signal, `To build upon what you said:\n- `);
-    return;
-  }
-
-  const models = ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b', 'llama-3.3-70b-versatile'];
-  const groq = new Groq({ apiKey: groqKey });
-
-  for (const model of models) {
-    if (abort.signal.aborted) break;
-    try {
-      const stream = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent }
-        ],
-        model,
-        temperature: 0.25,
-        max_tokens: 600,
-        stream: true
-      }, { signal: abort.signal });
-
-      let seqNo = 0;
-      let accumulated = '';
-      let ttftSent = false;
-
-      for await (const chunk of stream) {
-        if (abort.signal.aborted) break;
-        if (session.activeReqId !== reqId) break;
-
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (!text) continue;
-
-        accumulated += text;
-        aMsg.text = accumulated;
-
-        if (!ttftSent) {
-          ttftSent = true;
-          aMsg.ttft = Date.now() - startTime;
-          broadcastToSession(sessionId, {
-            type: 'chat_start',
-            msgId: aMsgId,
-            reqId,
-            ttft: aMsg.ttft,
-            sessionId
-          });
-        }
-
-        broadcastToSession(sessionId, {
-          type: 'chat_chunk',
-          msgId: aMsgId,
-          reqId,
-          seqNo: seqNo++,
-          chunk: text,
-          fullText: accumulated,
-          sessionId
-        });
-      }
-
-      if (!abort.signal.aborted && session.activeReqId === reqId) {
-        const totalTime = Date.now() - startTime;
-        aMsg.status = 'complete';
-        aMsg.totalTime = totalTime;
-
-        broadcastToSession(sessionId, {
-          type: 'chat_done',
-          msgId: aMsgId,
-          reqId,
-          fullText: accumulated,
-          totalTime,
-          sessionId
-        });
-
-        session.activeReqId = null;
-        session.activeAbort = null;
-      }
-      return;
-    } catch (err) {
-      if (abort.signal.aborted) break;
-      console.warn(`Help continue model ${model} error: ${err.message}`);
-    }
-  }
-
-  if (!abort.signal.aborted && session.activeReqId === reqId) {
-    await streamMockAnswer(sessionId, `Continue: ${question}`, aMsgId, reqId, startTime, abort.signal, `To build upon what you said:\n- `);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────
 //  REST endpoints
 // ─────────────────────────────────────────────────────────────
 function getLocalIpAddress() {
@@ -1039,31 +775,7 @@ app.get('/api/context', (req, res) => res.json(candidateContext));
 app.post('/api/context', (req, res) => {
   const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language'];
   fields.forEach(f => { if (req.body[f] !== undefined) candidateContext[f] = req.body[f]; });
-
-  // Extract technical keywords from background & merge with existing 100+ keywords
-  const textCorpus = `${candidateContext.resume || ''} ${candidateContext.jobDescription || ''} ${candidateContext.projects || ''} ${candidateContext.targetRole || ''}`;
-  const potentialTerms = textCorpus.split(/[,.\n;()]+/).map(t => t.trim()).filter(t => {
-    return t.length >= 2 && t.length <= 30 &&
-      !/^(with|years?|in|and|for|the|of|to|from|on|at|by|our|my|their|his|her|this|that|building|large|scale|well|used|using|experience|work|strong|team|role|responsible|engineer|developer|build|manage|lead|high|daily|platforms?)\b/i.test(t);
-  });
-
-  potentialTerms.forEach(term => {
-    const isCodeFormat = /^[a-z0-9]+_[a-z0-9_]+$/i.test(term) || /^[A-Z][a-zA-Z0-9]+$/.test(term) || /^[A-Z]{2,}$/.test(term);
-    const matchesKnown = Array.from(technicalVocabulary).some(k => k.toLowerCase() === term.toLowerCase());
-    if (isCodeFormat || matchesKnown) {
-      technicalVocabulary.add(term);
-    }
-  });
-
-  // Ensure all baseline 100+ keywords are preserved
-  DEFAULT_100_TECHNICAL_KEYWORDS.forEach(k => technicalVocabulary.add(k));
-  candidateContext.keywords = getTechnicalVocabularyList();
-
-  res.json({
-    success: true,
-    context: candidateContext,
-    keywordsCount: candidateContext.keywords.length
-  });
+  res.json({ success: true, context: candidateContext });
 });
 
 app.get('/api/vocabulary', (req, res) => {
@@ -1145,7 +857,9 @@ wss.on('connection', (ws) => {
 
   let currentSessionId = null;
   let userRole = null;
+  let deepgramWs = null;
   let keepAliveInterval = null;
+  const audioChunkQueue = [];
 
   function buildDeepgramUrl() {
     const params = new URLSearchParams();
@@ -1165,205 +879,116 @@ wss.on('connection', (ws) => {
     return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
   }
 
-  function ensureDeepgramSocket(sessionId, source = 'interviewer') {
+  function ensureDeepgramSocket(sessionId) {
     const dgKey = process.env.DEEPGRAM_API_KEY;
     if (!dgKey) return null;
-
-    const session = sessions.get(sessionId) || getOrCreateSession(sessionId);
-    const isCandidate = source === 'candidate';
-    const currentSocket = isCandidate ? session.candidateDeepgramWs : session.interviewerDeepgramWs;
-    const currentQueue = isCandidate ? session.candidateQueue : session.interviewerQueue;
-
-    if (currentSocket?.readyState === WebSocket.OPEN) return currentSocket;
-    if (currentSocket?.readyState === WebSocket.CONNECTING) return currentSocket;
+    if (deepgramWs?.readyState === WebSocket.OPEN) return deepgramWs;
+    if (deepgramWs?.readyState === WebSocket.CONNECTING) return deepgramWs;
 
     const dgUrl = buildDeepgramUrl();
 
     try {
-      const dgWs = new WebSocket(dgUrl, { headers: { Authorization: `Token ${dgKey}` } });
+      deepgramWs = new WebSocket(dgUrl, { headers: { Authorization: `Token ${dgKey}` } });
 
-      if (isCandidate) {
-        session.candidateDeepgramWs = dgWs;
-      } else {
-        session.interviewerDeepgramWs = dgWs;
-      }
-
-      dgWs.on('open', () => {
-        if (isCandidate) {
-          session.candidateSocketEpoch = Date.now();
-        } else {
-          session.interviewerSocketEpoch = Date.now();
-        }
-
-        ws.send(JSON.stringify({
-          type: 'deepgram_status',
-          source,
-          status: 'connected'
-        }));
+      deepgramWs.on('open', () => {
+        ws.send(JSON.stringify({ type: 'deepgram_status', status: 'connected' }));
 
         // Flush any audio chunks queued while connecting
-        while (currentQueue.length > 0) {
+        while (audioChunkQueue.length > 0) {
           try {
-            const chunk = currentQueue.shift();
-            dgWs.send(chunk);
+            const chunk = audioChunkQueue.shift();
+            deepgramWs.send(chunk);
           } catch (e) {}
         }
 
-        dgWs.keepAliveTimer = setInterval(() => {
-          if (dgWs.readyState === WebSocket.OPEN) {
-            dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
+        keepAliveInterval = keepAliveInterval || setInterval(() => {
+          if (deepgramWs?.readyState === WebSocket.OPEN) {
+            deepgramWs.send(JSON.stringify({ type: 'KeepAlive' }));
           }
         }, 5000);
       });
 
-      dgWs.on('message', (dgMsg) => {
+      deepgramWs.on('message', (dgMsg) => {
         try {
           const payload = JSON.parse(dgMsg.toString());
-          const s = sessions.get(sessionId);
-          if (!s) return;
+          const session = sessions.get(sessionId);
+          if (!session) return;
 
           const transcript = payload.channel?.alternatives[0]?.transcript || '';
           const words = payload.channel?.alternatives[0]?.words || [];
           const isFinal = payload.is_final;
           const speechFinal = payload.speech_final;
           const type = payload.type;
-          const startRel = payload.start || 0;
-          const epoch = isCandidate ? s.candidateSocketEpoch : s.interviewerSocketEpoch;
-          const sessionTimestamp = epoch + Math.round(startRel * 1000);
 
-          if (isCandidate) {
-            // ── Candidate Microphone Speech Stream ──
-            if (transcript.trim()) {
-              broadcastToSession(sessionId, {
-                type: 'candidate_transcript_update',
-                transcript,
-                isFinal: isFinal || false,
-                speechFinal: speechFinal || false,
-                sessionTimestamp
-              });
-
-              if (isFinal) {
-                const committed = s.candidateAccumulator.addFinal(transcript, speechFinal, words);
-                if (committed) {
-                  commitCandidateSpeech(sessionId, committed.text, s, committed.words, committed.startTime, committed.endTime, false);
-                }
-              } else {
-                s.candidateAccumulator.addInterim(transcript);
+          // Broadcast raw transcript to UI
+          if (transcript.trim()) {
+            const tHash = hashText(transcript);
+            if (isFinal && session.seenTranscriptHashes.has(tHash)) return;
+            if (isFinal) {
+              session.seenTranscriptHashes.add(tHash);
+              if (session.seenTranscriptHashes.size > 200) {
+                const arr = [...session.seenTranscriptHashes];
+                session.seenTranscriptHashes = new Set(arr.slice(-100));
               }
             }
 
-            if (type === 'UtteranceEnd') {
-              const res = s.candidateAccumulator._commit();
-              if (res) {
-                commitCandidateSpeech(sessionId, res.text, s, res.words, res.startTime, res.endTime, false);
+            broadcastToSession(sessionId, {
+              type: 'transcript_update',
+              transcript,
+              isFinal: isFinal || false,
+              speechFinal: speechFinal || false
+            });
+
+            if (isFinal) {
+              const committed = session.transcriptAccumulator.addFinal(transcript, speechFinal, words);
+              if (committed) {
+                commitQuestion(sessionId, committed, session, session.transcriptAccumulator.consumeWords(), committed);
               }
+            } else {
+              session.transcriptAccumulator.addInterim(transcript);
             }
+          }
 
-          } else {
-            // ── Interviewer Meeting Audio Stream ──
-            if (transcript.trim()) {
-              const tHash = hashText(transcript);
-              if (isFinal && s.seenTranscriptHashes.has(tHash)) return;
-              if (isFinal) {
-                s.seenTranscriptHashes.add(tHash);
-                if (s.seenTranscriptHashes.size > 200) {
-                  const arr = [...s.seenTranscriptHashes];
-                  s.seenTranscriptHashes = new Set(arr.slice(-100));
-                }
-              }
-
-              // Interruption handling:
-              // If interviewer speaks while candidate was in the middle of speaking,
-              // finalize candidate's partial words as provisional so they are not lost!
-              if (s.candidateAccumulator && (s.candidateAccumulator.committed || s.candidateAccumulator.interim)) {
-                s.candidateAccumulator.forceCommitProvisional();
-              }
-
-              broadcastToSession(sessionId, {
-                type: 'transcript_update',
-                transcript,
-                isFinal: isFinal || false,
-                speechFinal: speechFinal || false,
-                sessionTimestamp
-              });
-
-              if (isFinal) {
-                const committed = s.interviewerAccumulator.addFinal(transcript, speechFinal, words);
-                if (committed) {
-                  commitQuestion(sessionId, committed, s, s.interviewerAccumulator.consumeWords(), committed);
-                }
-              } else {
-                s.interviewerAccumulator.addInterim(transcript);
-              }
-            }
-
-            // VAD silence event — only commit if sentence is grammatically complete!
-            if (type === 'UtteranceEnd') {
-              const acc = s.interviewerAccumulator;
-              const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
-              if (full && !acc.isIncomplete(full)) {
-                const words = acc.consumeWords();
-                const committed = acc.forceCommit();
-                if (committed) commitQuestion(sessionId, committed, s, words, committed);
-              }
+          // VAD silence event — only commit if sentence is grammatically complete!
+          if (type === 'UtteranceEnd') {
+            const acc = session.transcriptAccumulator;
+            const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
+            if (full && !acc.isIncomplete(full)) {
+              const words = acc.consumeWords();
+              const committed = acc.forceCommit();
+              if (committed) commitQuestion(sessionId, committed, session, words, committed);
             }
           }
         } catch (e) {
-          console.error(`Deepgram ${source} parse error:`, e.message);
+          console.error('Deepgram parse error:', e.message);
         }
       });
 
-      dgWs.on('error', err => {
-        console.error(`Deepgram ${source} WS Error:`, err.message);
-        if (err.message && (err.message.includes('403') || err.message.includes('limit') || err.message.includes('quota'))) {
-          broadcastToSession(sessionId, {
-            type: 'stream_limitation',
-            source,
-            message: `Deepgram concurrent stream limitation reached. Retaining primary interviewer stream.`
-          });
-        }
+      deepgramWs.on('error', err => console.error('Deepgram WS Error:', err.message));
+      deepgramWs.on('close', () => {
+        if (keepAliveInterval) { clearInterval(keepAliveInterval); keepAliveInterval = null; }
+        deepgramWs = null;
       });
 
-      dgWs.on('close', () => {
-        if (dgWs.keepAliveTimer) clearInterval(dgWs.keepAliveTimer);
-        if (isCandidate) {
-          session.candidateDeepgramWs = null;
-        } else {
-          session.interviewerDeepgramWs = null;
-        }
-      });
-
-      return dgWs;
+      return deepgramWs;
     } catch (e) {
-      console.error(`Deepgram ${source} init error:`, e.message);
+      console.error('Deepgram init error:', e.message);
       return null;
     }
   }
 
   ws.on('message', async (message, isBinary) => {
-    // Binary = audio chunk from MediaRecorder
-    // Byte 0 indicates source: 0x01 = interviewer (tab), 0x02 = candidate (mic), 0x03 = mobile mic
+    // Binary = audio chunk from MediaRecorder (laptop tab/mic or mobile mic)
     if (isBinary) {
-      let sourceName = 'interviewer';
-      let audioPayload = message;
-
-      if (message.length > 1 && (message[0] === 1 || message[0] === 2 || message[0] === 3)) {
-        sourceName = (message[0] === 2 || message[0] === 3) ? 'candidate' : 'interviewer';
-        audioPayload = message.subarray(1);
-      }
-
-      const session = sessions.get(currentSessionId) || getOrCreateSession(currentSessionId);
-      const dgSocket = ensureDeepgramSocket(currentSessionId || 'SESSION-1', sourceName);
-      const queueRef = sourceName === 'candidate' ? session.candidateQueue : session.interviewerQueue;
-
+      const dgSocket = ensureDeepgramSocket(currentSessionId || 'SESSION-1');
       if (dgSocket?.readyState === WebSocket.OPEN) {
-        while (queueRef && queueRef.length > 0) {
-          try { dgSocket.send(queueRef.shift()); } catch (e) {}
+        while (audioChunkQueue.length > 0) {
+          try { dgSocket.send(audioChunkQueue.shift()); } catch (e) {}
         }
-        try { dgSocket.send(audioPayload); } catch (e) {}
+        try { dgSocket.send(message); } catch (e) {}
       } else if (dgSocket?.readyState === WebSocket.CONNECTING) {
-        if (queueRef && queueRef.length < 50) {
-          queueRef.push(audioPayload);
+        if (audioChunkQueue.length < 50) {
+          audioChunkQueue.push(message);
         }
       }
       return;
@@ -1396,7 +1021,7 @@ wss.on('connection', (ws) => {
             session.mobileWss.add(ws);
           }
 
-          const currentAcc = session.interviewerAccumulator;
+          const currentAcc = session.transcriptAccumulator;
           const currentTranscript = (currentAcc.committed ? currentAcc.committed + ' ' + currentAcc.interim : currentAcc.interim).trim();
 
           // Send existing chat history & current transcript on join/reconnect
@@ -1414,59 +1039,33 @@ wss.on('connection', (ws) => {
         }
 
         case 'start_deepgram_flux': {
-          ensureDeepgramSocket(currentSessionId || 'SESSION-1', 'interviewer');
-          ensureDeepgramSocket(currentSessionId || 'SESSION-1', 'candidate');
+          ensureDeepgramSocket(currentSessionId || 'SESSION-1');
           break;
         }
 
         case 'stop_deepgram': {
-          const session = sessions.get(currentSessionId);
-          if (session) {
-            if (session.interviewerDeepgramWs) {
-              session.interviewerDeepgramWs.close();
-              session.interviewerDeepgramWs = null;
-            }
-            if (session.candidateDeepgramWs) {
-              session.candidateDeepgramWs.close();
-              session.candidateDeepgramWs = null;
-            }
-          }
+          if (keepAliveInterval) { clearInterval(keepAliveInterval); keepAliveInterval = null; }
+          deepgramWs?.close();
+          deepgramWs = null;
           break;
         }
 
         case 'transcript_sync': {
-          // Web Speech API path
+          // Web Speech API path (browser speech recognition)
           const session = sessions.get(currentSessionId);
           if (!session) break;
 
-          const source = data.source === 'candidate' ? 'candidate' : 'interviewer';
+          broadcastToSession(currentSessionId, {
+            type: 'transcript_update',
+            transcript: data.transcript,
+            isFinal: data.isFinal
+          });
 
-          if (source === 'candidate') {
-            broadcastToSession(currentSessionId, {
-              type: 'candidate_transcript_update',
-              transcript: data.transcript,
-              isFinal: data.isFinal
-            });
-            const isSpeechFinal = Boolean(data.speechFinal !== undefined ? data.speechFinal : data.isFinal);
-            if (data.isFinal) {
-              const committed = session.candidateAccumulator.addFinal(data.transcript, isSpeechFinal);
-              if (committed) commitCandidateSpeech(currentSessionId, committed.text, session, committed.words, committed.startTime, committed.endTime, false);
-            } else {
-              session.candidateAccumulator.addInterim(data.transcript);
-            }
+          if (data.isFinal) {
+            const committed = session.transcriptAccumulator.addFinal(data.transcript, false);
+            if (committed) commitQuestion(currentSessionId, committed, session);
           } else {
-            const isSpeechFinal = Boolean(data.speechFinal !== undefined ? data.speechFinal : data.isFinal);
-            broadcastToSession(currentSessionId, {
-              type: 'transcript_update',
-              transcript: data.transcript,
-              isFinal: data.isFinal
-            });
-            if (data.isFinal) {
-              const committed = session.interviewerAccumulator.addFinal(data.transcript, isSpeechFinal);
-              if (committed) commitQuestion(currentSessionId, committed, session);
-            } else {
-              session.interviewerAccumulator.addInterim(data.transcript);
-            }
+            session.transcriptAccumulator.addInterim(data.transcript);
           }
           break;
         }
@@ -1476,29 +1075,16 @@ wss.on('connection', (ws) => {
           const session = sessions.get(currentSessionId) || getOrCreateSession(currentSessionId);
           let q = data.question?.trim();
           if (!q) {
-            const acc = session.interviewerAccumulator;
+            const acc = session.transcriptAccumulator;
             q = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
           }
           if (q) {
             session.pendingQuestionHash = null;
-            session.interviewerAccumulator.committed = '';
-            session.interviewerAccumulator.interim = '';
-            session.interviewerAccumulator._clearSettle();
+            session.transcriptAccumulator.committed = '';
+            session.transcriptAccumulator.interim = '';
+            session.transcriptAccumulator._clearSettle();
             commitQuestion(currentSessionId, q, session);
           }
-          break;
-        }
-
-        case 'help_continue': {
-          // Candidate requests help on what to say next based on original question and their spoken words
-          const session = sessions.get(currentSessionId) || getOrCreateSession(currentSessionId);
-          const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
-          if (!lastQ) break;
-
-          const candidateSpeeches = session.messages.filter(m => m.role === 'candidate' && m.createdAt >= lastQ.createdAt);
-          const candidateSpokenText = candidateSpeeches.map(m => m.text).join(' ');
-
-          await streamHelpContinue(currentSessionId, lastQ.text, candidateSpokenText, lastQ.id, session);
           break;
         }
 
@@ -1521,7 +1107,7 @@ wss.on('connection', (ws) => {
           let q = data.question?.trim();
           if (!q) {
             const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
-            q = lastQ?.text || (session.interviewerAccumulator.committed ? session.interviewerAccumulator.committed + ' ' + session.interviewerAccumulator.interim : session.interviewerAccumulator.interim).trim();
+            q = lastQ?.text || (session.transcriptAccumulator.committed ? session.transcriptAccumulator.committed + ' ' + session.transcriptAccumulator.interim : session.transcriptAccumulator.interim).trim();
           }
           if (q) {
             session.pendingQuestionHash = null;
@@ -1597,20 +1183,10 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (keepAliveInterval) { clearInterval(keepAliveInterval); keepAliveInterval = null; }
+    deepgramWs?.close();
 
     if (currentSessionId && sessions.has(currentSessionId)) {
       const session = sessions.get(currentSessionId);
-      if (userRole === 'laptop' && session.laptopWs === ws) {
-        // If laptop disconnects, close Deepgram streaming connections
-        if (session.interviewerDeepgramWs) {
-          session.interviewerDeepgramWs.close();
-          session.interviewerDeepgramWs = null;
-        }
-        if (session.candidateDeepgramWs) {
-          session.candidateDeepgramWs.close();
-          session.candidateDeepgramWs = null;
-        }
-      }
       if (userRole === 'mobile') {
         session.mobileWss.delete(ws);
       } else if (userRole === 'laptop' && session.laptopWs === ws) {
