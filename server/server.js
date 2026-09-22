@@ -40,32 +40,10 @@ const candidateContext = {
 // ─────────────────────────────────────────────────────────────
 //  Technical Vocabulary & Deepgram Keyterm Prompting
 // ─────────────────────────────────────────────────────────────
-const technicalVocabulary = new Set([
-  // Core Data & Big Data Engineering
-  'PySpark', 'coalesce', 'repartition', 'Databricks', 'Athena', 'Redshift',
-  'broadcast join', 'shuffle join', 'partition projection', 'dense_rank', 'row_number',
-  'DataFrame', 'RDD', 'Spark SQL', 'MapReduce', 'Hadoop', 'Parquet', 'Delta Lake',
-  // Common backend & distributed systems
-  'Kafka', 'PostgreSQL', 'Redis', 'WebSockets', 'GraphQL', 'Docker', 'Kubernetes',
-  // Key algorithmic concepts
-  'palindrome', 'two pointer', 'sliding window', 'binary search', 'dynamic programming',
-  'depth first search', 'breadth first search', 'memoization', 'in-place',
-  // Phonetically tricky terms
-  'asynchronous', 'concurrency', 'idempotent', 'polymorphism', 'encapsulation',
-  'microservices', 'load balancer', 'sharding', 'replication'
-]);
+const technicalVocabulary = new Set();
 
 function getTechnicalVocabularyList() {
-  const list = new Set(technicalVocabulary);
-  if (candidateContext.resume) {
-    candidateContext.resume.split(/[,.\n;()]+/).forEach(token => {
-      const trimmed = token.trim();
-      if (trimmed.length > 2 && trimmed.length < 35 && !/^(with|years?|in|and|for|the|of|to)\b/i.test(trimmed)) {
-        list.add(trimmed);
-      }
-    });
-  }
-  return Array.from(list);
+  return Array.from(technicalVocabulary);
 }
 
 // Critical words classification for word-level confidence checking
@@ -157,21 +135,7 @@ function getOrCreateSession(sessionId) {
 //  Collects Deepgram fragments → commits complete questions
 // ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
-const INCOMPLETE_PHRASES = [
-  // Trailing prepositions & particles (demand a noun/target object)
-  /\b(for|to|of|in|about|with|between|by|from|like|into|on|as|at|towards|upon|within)\s*$/i,
-  // Trailing conjunctions & clause connectors
-  /\b(and|or|but|because|if|when|while|where|so|than|whereas|whether|although|though|unless)\s*$/i,
-  // Trailing articles & determiners
-  /\b(a|an|the|this|that|these|those|my|your|our|their|his|her|its)\s*$/i,
-  // Trailing auxiliary/linking verbs
-  /\b(is|are|was|were|be|being|been|does|do|did|can|could|should|would|will|shall|might|must|have|has|had)\s*$/i,
-  // Common unfinished interview directive openings
-  /\b(write a code for|write code for|write a program for|how to implement|implement a|create a|explain how to|can you explain|difference between|what is the)\s*$/i,
-  // Common multi-word connectors
-  /\bfor example\s*$/i, /\bsuch as\s*$/i, /\bthere are\s+\w+\s+conditions?$/i, /\bassuming\s*$/i,
-  /\bincluding\s*$/i, /\bfor\s+each\s*$/i
-];
+const INCOMPLETE_PHRASES = [];
 
 const NOISE_ONLY = /^(uh+|um+|hmm+|mm+|okay+|yes+|no+|right|sure|alright|okay then|mhm+)[\s.,!?]*$/i;
 
