@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, Monitor, Volume2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Mic, Monitor, Volume2, AlertCircle, CheckCircle, ExternalLink } from 'lucide-react';
 
 export default function AudioCapture({ onAudioChunk, isListening, setIsListening, onTranscriptUpdate }) {
   const [sourceType, setSourceType] = useState('tab'); // 'tab' | 'mic'
@@ -14,7 +14,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
   const mediaRecorderRef = useRef(null);
   const speechRecognitionRef = useRef(null);
 
-  // Initialize Web Speech API as zero-config fallback
+  // Web Speech API fallback for local mic
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
@@ -41,7 +41,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
     }
   }, [onTranscriptUpdate]);
 
-  // Audio waveform visualizer loop
+  // Waveform canvas draw loop
   useEffect(() => {
     let animId;
     const canvas = canvasRef.current;
@@ -83,7 +83,12 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       if (sourceType === 'tab') {
         stream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: { echoCancellation: true, noiseSuppression: true }
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            suppressLocalAudioPlayback: false
+          }
         });
       } else {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -95,7 +100,7 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length === 0) {
         setHasAudioTrack(false);
-        setErrorMessage('⚠️ No audio track found! When selecting tab share in Chrome, make sure to check "Share tab audio".');
+        setErrorMessage('⚠️ No audio track found! When selecting a tab in Chrome, make sure to check "Share tab audio" at the bottom left of Chrome picker.');
         stream.getTracks().forEach(t => t.stop());
         return;
       }
@@ -105,18 +110,21 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       setTrackLabel(track.label || (sourceType === 'tab' ? 'Chrome Tab Audio' : 'Microphone Input'));
       streamRef.current = stream;
 
-      // Audio Context setup
+      // Extract ONLY audio tracks to create a pure Audio-Only MediaStream for MediaRecorder & Deepgram
+      const audioOnlyStream = new MediaStream(audioTracks);
+
+      // Audio Context setup for volume visualizer
       const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       audioContextRef.current = audioCtx;
-      const source = audioCtx.createMediaStreamSource(stream);
+      const source = audioCtx.createMediaStreamSource(audioOnlyStream);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 64;
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      // Send 250ms chunks to WebSocket handler for Deepgram Flux v2
+      // Record PURE audio-only WebM stream and send to Deepgram WS
       if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+        const recorder = new MediaRecorder(audioOnlyStream, { mimeType: 'audio/webm;codecs=opus' });
         recorder.ondataavailable = (e) => {
           if (e.data.size > 0 && onAudioChunk) {
             onAudioChunk(e.data);
@@ -166,13 +174,13 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
             <Volume2 className="w-5 h-5 text-indigo-400" />
             <h3 className="font-heading text-base font-bold text-white">Live Audio Capture</h3>
             {isListening ? (
-              <span className="pill-badge pill-badge-green">LISTENING</span>
+              <span className="pill-badge pill-badge-green">LISTENING LIVE</span>
             ) : (
-              <span className="pill-badge pill-badge-amber">PAUSED</span>
+              <span className="pill-badge pill-badge-amber">STANDBY</span>
             )}
           </div>
           <p className="text-xs text-zinc-400">
-            Captures interviewer speech directly from Chrome tab or Microphone.
+            Captures interviewer speech directly from Chrome tab (Google Meet, Zoom, YouTube) or Microphone.
           </p>
         </div>
 
@@ -213,12 +221,15 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
       <div className="flex items-center justify-between text-xs text-zinc-400">
         <div>
           {hasAudioTrack === true && (
-            <span className="text-emerald-400 flex items-center gap-1">
-              <CheckCircle className="w-3.5 h-3.5" /> Track Active: {trackLabel}
+            <span className="text-emerald-400 flex items-center gap-1 font-medium">
+              <CheckCircle className="w-3.5 h-3.5" /> Active Track: {trackLabel}
             </span>
           )}
         </div>
-        <span>Deepgram Flux v2 Active</span>
+        <div className="flex items-center gap-1 text-zinc-400">
+          <ExternalLink className="w-3 h-3 text-indigo-400" />
+          <span>Keep Copilot open side-by-side or read on your phone!</span>
+        </div>
       </div>
 
       {errorMessage && (
