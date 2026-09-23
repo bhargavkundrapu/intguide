@@ -1069,7 +1069,23 @@ body {
 }
 
 /* ── Markdown styles ── */
-.answer-text { font-size: 13px; color: var(--gray-800); line-height: 1.7; }
+.answer-text {
+  font-size: 14px;
+  color: var(--gray-800);
+  line-height: 1.7;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.markdown-content {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
 .md-p { margin: 0 0 6px 0; }
 .md-p:last-child { margin-bottom: 0; }
 .md-h2 { font-size: 15px; font-weight: 700; color: var(--gray-900); margin: 10px 0 4px; }
@@ -1078,24 +1094,17 @@ body {
 .md-ul, .md-ol { margin: 4px 0 8px 18px; padding: 0; }
 .md-ul li, .md-ol li { font-size: 13px; color: var(--gray-800); margin-bottom: 3px; line-height: 1.5; }
 
-.inline-code {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  background: var(--gray-100);
-  border: 1px solid var(--gray-200);
-  border-radius: 4px;
-  padding: 1px 5px;
-  color: var(--blue-700);
-}
-
-/* ── Code blocks (Pitch Black / Sleek Dark for both desktop and mobile) ── */
+/* ── Code blocks & Pre-formatted text (wrap long lines, no horizontal overflow) ── */
 .code-block-wrapper {
   margin: 12px 0;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  overflow: hidden;
+  border-radius: 8px;
   background: #090d16;
+  border: 1px solid #1e293b;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .code-block-header {
@@ -1105,59 +1114,88 @@ body {
   padding: 6px 12px;
   background: #0f172a;
   border-bottom: 1px solid #1e293b;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .code-lang-label {
-  font-size: 10px;
-  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
   font-weight: 700;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
   color: #38bdf8;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
 }
 
 .code-copy-btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
+  background: #1e293b;
+  border: 1px solid #334155;
   color: #94a3b8;
   font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
   padding: 3px 8px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .code-copy-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #f8fafc;
+  background: #334155;
+  color: #f1f5f9;
 }
 
 .code-block {
   margin: 0;
   padding: 12px 14px;
-  overflow-x: auto;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 13px;
-  line-height: 1.65;
-  color: #e2e8f0;
-  background: #090d16;
-  white-space: pre;
+  background: #090d16 !important;
+  color: #f8fafc !important;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+  overflow-x: hidden !important;
+  overflow-y: visible !important;
+  height: auto !important;
+  max-height: none !important;
   -webkit-overflow-scrolling: touch;
 }
 
-/* Inline code tag */
+.code-block code {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  white-space: pre-wrap !important;
+  overflow-wrap: anywhere !important;
+  word-break: normal !important;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .inline-code {
   background: #0f172a;
   color: #38bdf8;
-  border: 1px solid #1e293b;
   padding: 2px 6px;
   border-radius: 5px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.88em;
   font-weight: 500;
+  border: 1px solid #1e293b;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 /* Markdown headings and lists */
@@ -1350,8 +1388,18 @@ body {
   font-size: 15px;
   color: #1e293b;
   line-height: 1.65;
-  white-space: pre-wrap;
   box-shadow: 0 2px 6px rgba(0,0,0,0.03);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.mobile-chat-bottom-spacer {
+  height: 75vh;
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .mobile-bottombar {
@@ -1405,85 +1453,7 @@ body {
   border-color: #fecaca;
 }
 
-/* ══════════════════════════════════════════════
-   CODE BLOCK & MARKDOWN (PITCH BLACK BACKGROUND)
-══════════════════════════════════════════════ */
-.code-block-wrapper {
-  margin: 10px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #090d16;
-  border: 1px solid #1e293b;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-}
 
-.code-block-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 12px;
-  background: #0f172a;
-  border-bottom: 1px solid #1e293b;
-}
-
-.code-lang-label {
-  font-size: 11px;
-  font-weight: 700;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  color: #38bdf8;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.code-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: #1e293b;
-  border: 1px solid #334155;
-  color: #94a3b8;
-  font-size: 11px;
-  font-family: inherit;
-  font-weight: 500;
-  padding: 2px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.code-copy-btn:hover {
-  background: #334155;
-  color: #f1f5f9;
-}
-
-.code-block {
-  margin: 0;
-  padding: 12px 14px;
-  background: #090d16 !important;
-  color: #f8fafc !important;
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, Monaco, monospace;
-  font-size: 13px;
-  line-height: 1.55;
-  overflow-x: auto;
-  white-space: pre;
-  -webkit-overflow-scrolling: touch;
-}
-
-.code-block code {
-  font-family: inherit;
-  color: inherit;
-  background: transparent;
-}
-
-.inline-code {
-  background: #0f172a;
-  color: #38bdf8;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.9em;
-  border: 1px solid #1e293b;
-}
 
 /* Markdown typography in answers */
 .md-h2 {
@@ -1570,6 +1540,22 @@ body {
   border: 1px solid #fef3c7;
   border-radius: 6px;
   padding: 4px 8px;
+}
+
+@media (max-width: 480px) {
+  .mobile-chat-list {
+    padding: 10px 10px;
+    gap: 10px;
+  }
+  .mobile-chat-answer {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+  .code-block {
+    padding: 10px 10px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
 }
 
 

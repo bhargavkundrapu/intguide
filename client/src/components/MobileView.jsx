@@ -154,14 +154,73 @@ export default function MobileView({
   const [manualCode, setManualCode] = useState('');
   const [isPhoneMicActive, setIsPhoneMicActive] = useState(false);
   const [micError, setMicError] = useState('');
-  const bottomRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
+  const chatListRef = useRef(null);
+  const messageRefs = useRef({});
+  const activeAnswerIdRef = useRef(null);
+  const scrolledFirstContentRef = useRef(false);
+  const scrolledCompleteRef = useRef(false);
 
-  // Auto-scroll to latest message
+  const scrollToAnswerTop = useCallback((answerId, behavior = 'smooth') => {
+    const container = chatListRef.current;
+    const target = messageRefs.current[answerId];
+    if (!container || !target) return;
+    if (activeAnswerIdRef.current !== answerId) return; // Prevent old/interrupted answers from hijacking
+
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const relativeOffset = targetRect.top - containerRect.top;
+    // 8px margin from the top of the chat list container ensures clean visibility
+    const targetScrollTop = Math.max(0, container.scrollTop + relativeOffset - 8);
+
+    container.scrollTo({
+      top: targetScrollTop,
+      behavior
+    });
+  }, []);
+
+  // Align beginning of latest answer at top on first visible content and upon completion
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, messages[messages.length - 1]?.text]);
+    const latestAnswer = [...messages].reverse().find(m => m.role === 'answer');
+    if (!latestAnswer) return;
+
+    // Detect if a newer answer has started
+    if (latestAnswer.id !== activeAnswerIdRef.current) {
+      activeAnswerIdRef.current = latestAnswer.id;
+      scrolledFirstContentRef.current = false;
+      scrolledCompleteRef.current = false;
+    }
+
+    const hasVisibleContent = Boolean(latestAnswer.text && latestAnswer.text.trim().length > 0);
+
+    // 1. When first visible content appears, position beginning near top
+    if (hasVisibleContent && !scrolledFirstContentRef.current) {
+      scrolledFirstContentRef.current = true;
+      requestAnimationFrame(() => {
+        if (activeAnswerIdRef.current === latestAnswer.id) {
+          scrollToAnswerTop(latestAnswer.id, 'smooth');
+        }
+      });
+      return;
+    }
+
+    // 2. While streaming, do NOT scroll to bottom; let content grow downward naturally
+
+    // 3. When answer finishes, automatically align beginning at top once after final content has rendered
+    const isFinished = latestAnswer.status === 'complete' || latestAnswer.status === 'interrupted';
+    if (isFinished && !scrolledCompleteRef.current) {
+      scrolledCompleteRef.current = true;
+      // Double rAF ensures markdown layout and code block sizing are fully calculated
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (activeAnswerIdRef.current === latestAnswer.id) {
+            scrollToAnswerTop(latestAnswer.id, 'smooth');
+          }
+        });
+      });
+    }
+  }, [messages, scrollToAnswerTop]);
 
   // Keep phone screen awake during interview HUD mode
   useEffect(() => {
@@ -317,7 +376,7 @@ export default function MobileView({
       )}
 
       {/* Chat Messages */}
-      <div className="mobile-chat-list">
+      <div className="mobile-chat-list" ref={chatListRef}>
         {/* Live Speech Indicator Card */}
         {displayTranscript && (
           <div className="mobile-live-transcript-card">
@@ -363,7 +422,14 @@ export default function MobileView({
           }
 
           return (
-            <div key={msg.id} className="mobile-chat-answer">
+            <div
+              key={msg.id}
+              ref={el => {
+                if (el) messageRefs.current[msg.id] = el;
+                else delete messageRefs.current[msg.id];
+              }}
+              className="mobile-chat-answer"
+            >
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                 <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue-600)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   AI Copilot
@@ -395,7 +461,7 @@ export default function MobileView({
             </div>
           );
         })}
-        <div ref={bottomRef} />
+        <div className="mobile-chat-bottom-spacer" />
       </div>
 
       {/* Bottom Action Bar */}

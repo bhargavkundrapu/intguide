@@ -4,9 +4,27 @@ import { Copy, Check } from 'lucide-react';
 function CodeBlockItem({ lang, code }) {
   const [copied, setCopied] = useState(false);
 
+  const fallbackCopy = (text) => {
+    try {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.setAttribute('readonly', '');
+      el.style.position = 'absolute';
+      el.style.left = '-9999px';
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    } catch (err) {}
+  };
+
   const handleCopy = (e) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(code).catch(() => {});
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).catch(() => fallbackCopy(code));
+    } else {
+      fallbackCopy(code);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

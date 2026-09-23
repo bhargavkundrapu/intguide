@@ -295,7 +295,7 @@ function buildContext(session, currentQuestion) {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  System prompt — simpler & shorter code, neat logic below, edge cases
+//  System prompt — simple, short, natural answers & clean code
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
   const { candidate, parentQuestion, parentAnswer, isFollowUp } = ctx;
@@ -305,8 +305,7 @@ function buildSystemPrompt(ctx) {
     followUpSection = `
 PREVIOUS QUESTION: ${parentQuestion}
 PREVIOUS ANSWER SUMMARY: ${parentAnswer ? parentAnswer.slice(0, 500) : '(still generating)'}
-This is a follow-up. Continue the relevant discussion without repeating the entire previous answer.
-If the reference is genuinely ambiguous, ask ONE concise clarification question.`;
+This is a follow-up. Answer the new point directly using the earlier conversation.`;
   }
 
   return `You are a real-time interview response assistant designed to help candidates answer with confidence and clarity.
@@ -322,26 +321,34 @@ CANDIDATE PROFILE:
 - Language preference: ${candidate.language || 'English'}
 ${followUpSection}
 
-CRITICAL CODING RESPONSE RULES (STRICT):
-When answering any coding task or algorithm question, ALWAYS format your answer in this exact clean structure:
-1. **Core Approach (1-2 sentences)**: State the direct strategy (e.g., "Use a hash map to store seen values in a single pass.").
-2. **Simple & Short Code**:
-   - Provide the SHORTEST, SIMPLEST, and most elegant code possible.
-   - Do NOT include unnecessary boilerplate, wrappers, or boilerplate imports unless required.
-   - Write clean, modern, readable code.
-   - Always wrap code in markdown code fences (\`\`\`language ... \`\`\`).
-3. **### How It Works**:
-   - 2-3 neat, simple bullet points explaining the logic clearly step-by-step below the code.
-4. **### Edge Cases & Complexity**:
-   - List key edge cases handled (e.g., empty/null input, single element, negative numbers, boundaries).
-   - Time Complexity: O(...) | Space Complexity: O(...) with 1-line rationale.
+ANSWER GENERATION INSTRUCTIONS:
+Explain in simple everyday English. Assume the reader is a beginner. Start directly with the answer. Use short sentences and natural wording that is easy to say aloud.
 
-GENERAL RESPONSE RULES:
-1. Begin with a direct, useful sentence. Never start with "Certainly!", "Great question!", or "Here is the code."
-2. Keep answers concise, natural, and comfortable to read aloud in an interview setting.
-3. For definitions/concepts: state what it is, why it's used, and a quick practical example.
-4. For behavioral/experience: use ONLY verified résumé/project facts. Do not invent fake metrics or employers.
-5. For follow-up questions: address the specific follow-up directly without repeating earlier answers.`;
+For a normal question, aim for 2–4 short sentences. Use a few brief bullets only when listing steps or comparing points.
+
+Answer every part of a multi-part question. Add length only when needed to cover the question accurately.
+
+Use necessary technical terms, but explain unfamiliar terms briefly. Avoid complicated wording, lengthy introductions, repetition, filler, and unrelated details. Never start with "Certainly!", "Great question!", or "Here is the answer."
+
+For follow-up questions, use the earlier conversation and answer the new point directly.
+
+Treat these as writing guidelines, not hard limits that cut off an incomplete answer.
+
+CODING GUIDELINES:
+Prefer one straightforward, correct solution in the language or framework requested.
+
+Use readable variable names, necessary imports, and a small number of clear steps. Avoid unnecessary classes, helper layers, repeated setup, excessive comments, and clever one-liners that are hard to explain.
+
+Keep lines reasonably short by using valid source-code line breaks. Do not alter identifiers, string contents, or logic just to shorten a line.
+
+For coding answers, normally provide:
+* One short sentence explaining the approach.
+* One complete code block for the requested task.
+* Two short sentences explaining the important steps.
+
+Do not omit required logic, use placeholder ellipses, or sacrifice correctness to reduce code length. Do not append edge-case or complexity sections unless asked.
+
+Do NOT automatically generate "Edge Cases," "Time Complexity," or "Space Complexity" sections. If the interviewer specifically asks about one of these topics, answer that question briefly in normal language without adding unnecessary sections.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -661,15 +668,17 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
   let answer = '';
 
   if (q.includes('sql') || q.includes('query') || q.includes('salary') || q.includes('database')) {
-    answer = `To find the second-highest salary per department handling ties, use DENSE_RANK().\n\n\`\`\`sql\nSELECT department, employee_name, salary\nFROM (\n  SELECT department, employee_name, salary,\n         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk\n  FROM employees\n  WHERE salary IS NOT NULL\n) ranked\nWHERE rnk = 2;\n\`\`\`\n\nDENSE_RANK gives rank 2 to all employees tied at the second-highest salary in each department. NULL salaries are excluded with the WHERE clause. Time complexity is O(n log n) due to the window function sort.`;
+    answer = `To find the second-highest salary per department while handling ties, use the DENSE_RANK() window function.\n\n\`\`\`sql\nSELECT department, employee_name, salary\nFROM (\n  SELECT department, employee_name, salary,\n         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk\n  FROM employees\n  WHERE salary IS NOT NULL\n) ranked\nWHERE rnk = 2;\n\`\`\`\n\nThe inner query ranks employees by salary within each department without skipping rank numbers when ties occur. The outer query filters for rank 2 to return all second-highest earners cleanly.`;
   } else if (q.includes('react') || q.includes('virtual dom') || q.includes('usememo')) {
-    answer = `React's Virtual DOM is a lightweight JS representation of the real DOM. When state changes, React diffs the old and new virtual trees and applies only the minimum required real DOM updates.\n\n**Key points:**\n- Reconciliation uses fiber architecture to prioritize updates\n- useMemo caches computed values; useCallback caches function references to prevent child re-renders\n- Keys in lists help React identify which items changed\n\n**Example:** In our real-time dashboard, wrapping chart components in React.memo cut re-renders by ~60% under high data throughput.`;
+    answer = `React's Virtual DOM is a lightweight memory representation of the real DOM. When state changes, React compares the new tree with the old one and updates only the changed DOM elements.\n\n- useMemo caches calculated values across renders\n- useCallback preserves function references to avoid child re-renders\n- Keys help React track which items were added or moved`;
   } else if (q.includes('node') || q.includes('event loop')) {
-    answer = `Node.js runs on a single thread using a non-blocking event loop powered by libuv.\n\n**Loop phases:** Timers → Pending I/O → Idle → Poll → Check (setImmediate) → Close\n\nMicrotasks (Promises, process.nextTick) drain completely between each phase.\n\n**Example:** I built a WebSocket gateway sustaining 50k concurrent connections by keeping all I/O async and delegating CPU tasks to Worker Threads.`;
+    answer = `Node.js runs single-threaded JavaScript using a non-blocking event loop backed by libuv.\n\nIt handles timers, pending I/O, and poll events in distinct phases, draining microtasks after each phase. Long compute jobs should be offloaded to worker threads so the main event loop never blocks.`;
   } else if (q.includes('broadcast join') || q.includes('join')) {
-    answer = `A broadcast join sends a small table to every node in a distributed cluster so no data shuffle is needed for the large table.\n\n**Use it when:** the smaller table fits in memory (typically < 10MB in Spark).\n\n**Avoid it when:** the broadcast table is large — it increases driver memory pressure and network cost on every node.\n\n**Example:** In PySpark: \`spark.sql(\"SELECT /*+ BROADCAST(dim) */ * FROM fact JOIN dim ON fact.id = dim.id\")\``;
+    answer = `A broadcast join copies a small table to all worker nodes so the large table can be joined locally without network shuffling.\n\nUse it when the smaller table fits comfortably in executor memory, typically under 10MB to a few hundred megabytes in Spark. Avoid broadcasting large tables because it can overwhelm driver and executor memory.`;
   } else {
-    answer = `${question.replace(/^(what is|how do|explain|tell me about)\s+/i, '').charAt(0).toUpperCase() + question.replace(/^(what is|how do|explain|tell me about)\s+/i, '').slice(1)} involves balancing correctness, performance, and maintainability.\n\n**Core concept:** Break the problem into well-scoped pieces, handle edge cases explicitly, and prefer proven patterns over custom solutions.\n\n**Example:** In my microservices work, applying this approach reduced incident response time by improving observability and reducing inter-service coupling.`;
+    const cleanQ = question.replace(/^(what is|how do|explain|tell me about)\s+/i, '').trim();
+    const topic = cleanQ ? cleanQ.charAt(0).toUpperCase() + cleanQ.slice(1) : 'This problem';
+    answer = `${topic} is best approached by breaking the task into simple, testable steps.\n\nStart directly with the core solution and keep the implementation readable and standard. In my experience, straightforward solutions are easier to maintain, review, and debug.`;
   }
 
   const fullAnswer = text + answer;
