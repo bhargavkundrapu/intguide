@@ -308,6 +308,11 @@ export default function App() {
       case 'ai_stream_end':
         break;
       case 'ai_clear':
+      case 'history_cleared':
+        setMessages([]);
+        setCommittedTranscript('');
+        setInterimTranscript('');
+        setManualTranscript('');
         break;
 
       case 'listening_status':
@@ -316,10 +321,6 @@ export default function App() {
 
       case 'heartbeat_ping':
         wsRef.current?.send(JSON.stringify({ type: 'heartbeat_pong' }));
-        break;
-
-      case 'history_cleared':
-        setMessages([]);
         break;
     }
   }, [upsertMessage, patchMessage]);
@@ -351,10 +352,11 @@ export default function App() {
   }, [manualTranscript, committedTranscript, interimTranscript]);
 
   const handleExplainMore = useCallback((msgId) => {
-    // Find the question linked to this answer
-    const aMsg = messages.find(m => m.id === msgId);
-    const qMsg = messages.find(m => m.id === aMsg?.parentId);
-    const q = qMsg?.text || committedTranscript || manualTranscript || 'Explain more';
+    // Find the question or answer to explain
+    const aMsg = msgId ? messages.find(m => m.id === msgId) : [...messages].reverse().find(m => m.role === 'answer');
+    const qMsg = aMsg ? messages.find(m => m.id === aMsg.parentId) : null;
+    const lastQ = [...messages].reverse().find(m => m.role === 'question');
+    const q = qMsg?.text || lastQ?.text || committedTranscript || manualTranscript || (aMsg?.text ? `the previous answer: ${aMsg.text.slice(0, 150)}` : 'the latest interview question');
     wsRef.current?.send(JSON.stringify({ type: 'explain_more', question: q }));
   }, [messages, committedTranscript, manualTranscript]);
 
@@ -421,7 +423,7 @@ export default function App() {
         onAudioChunk={handleAudioChunk}
         onTriggerAnswer={triggerAnswer}
         onExplainMore={() => handleExplainMore(latestAnswer?.id)}
-        onClear={() => wsRef.current?.send(JSON.stringify({ type: 'clear_history' }))}
+        onClear={handleClearHistory}
         onTogglePause={handleTogglePause}
         onJoinSession={handleJoinSession}
         onEditQuestion={handleEditQuestion}

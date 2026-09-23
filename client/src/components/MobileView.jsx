@@ -345,6 +345,22 @@ export default function MobileView({
         </div>
       </div>
 
+      {isPaused && (
+        <div className="mobile-paused-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Pause size={13} style={{ color: '#d97706' }} />
+            <span>Listening is paused</span>
+          </div>
+          <button
+            onClick={onTogglePause}
+            className="mobile-resume-chip"
+            type="button"
+          >
+            <Play size={11} /> Tap to Resume
+          </button>
+        </div>
+      )}
+
       {micError && (
         <div style={{ background: '#fef2f2', color: '#dc2626', padding: '6px 12px', fontSize: 12, borderBottom: '1px solid #fecaca', textAlign: 'center' }}>
           {micError}
@@ -464,32 +480,46 @@ export default function MobileView({
         <div className="mobile-chat-bottom-spacer" />
       </div>
 
-      {/* Bottom Action Bar */}
+      {/* Bottom Action Bar (Fixed to bottom on mobile) */}
       <div className="mobile-bottombar">
         <button
           className="mobile-action-btn primary"
           onClick={() => onTriggerAnswer(displayTranscript || latestQuestion?.text || '')}
+          type="button"
+          title="Answer Question"
         >
           <Zap size={16} />
-          Answer
-        </button>
-
-        <button className="mobile-action-btn amber" onClick={onExplainMore}>
-          <Zap size={16} />
-          Explain
+          <span>Answer</span>
         </button>
 
         <button
-          className={`mobile-action-btn ${isPaused ? 'amber' : ''}`}
-          onClick={onTogglePause}
+          className="mobile-action-btn amber"
+          onClick={onExplainMore}
+          type="button"
+          title="Explain in detail"
         >
-          {isPaused ? <Play size={16} /> : <Pause size={16} />}
-          {isPaused ? 'Resume' : 'Pause'}
+          <Sparkles size={16} />
+          <span>Explain</span>
         </button>
 
-        <button className="mobile-action-btn danger" onClick={onClear}>
+        <button
+          className={`mobile-action-btn ${isPaused ? 'paused-active' : ''}`}
+          onClick={onTogglePause}
+          type="button"
+          title={isPaused ? 'Resume Listening' : 'Pause Listening'}
+        >
+          {isPaused ? <Play size={16} /> : <Pause size={16} />}
+          <span>{isPaused ? 'Resume' : 'Pause'}</span>
+        </button>
+
+        <button
+          className="mobile-action-btn danger"
+          onClick={onClear}
+          type="button"
+          title="Clear Conversation"
+        >
           <RotateCcw size={16} />
-          Clear
+          <span>Clear</span>
         </button>
       </div>
     </div>
