@@ -151,8 +151,15 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
-    this.SETTLE_MS = 1400;    // settle after 1.4s of quiet
+    this.SETTLE_MS = 2000;    // settle after 2.0s of quiet (prevents cutting off speech)
     this.WINDOW_MS = 15000;   // 15-second question accumulation window
+  }
+
+  _getDynamicSettleMs() {
+    const session = sessions.get(this.sessionId);
+    const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
+    // If an answer is currently streaming, allow 2600ms of quiet before settling to protect the active answer
+    return isStreaming ? 2600 : this.SETTLE_MS;
   }
 
   isIncomplete(text) {
@@ -169,7 +176,7 @@ class TranscriptAccumulator {
     if (!this.speechStartTime) this.speechStartTime = Date.now();
     this.interim = text;
     // Debounce settle timer while speaker is active
-    this._scheduleSettle(this.SETTLE_MS);
+    this._scheduleSettle(this._getDynamicSettleMs());
   }
 
   addFinal(text, speechFinal, words = []) {
@@ -189,9 +196,9 @@ class TranscriptAccumulator {
     const elapsed = Date.now() - this.speechStartTime;
 
     if (speechFinal) {
-      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to 5s window
+      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to window
       if (this.isIncomplete(this.committed)) {
-        const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
+        const remaining = Math.max(1400, this.WINDOW_MS - elapsed);
         this._scheduleSettle(remaining);
         return null;
       }
@@ -199,7 +206,7 @@ class TranscriptAccumulator {
       return this._commit();
     } else {
       // is_final received but not end of utterance yet -> debounce settle
-      this._scheduleSettle(this.SETTLE_MS);
+      this._scheduleSettle(this._getDynamicSettleMs());
     }
     return null;
   }
@@ -474,11 +481,18 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     }
   }
 
-  // If an answer is actively streaming, don't let short filler noise (e.g. "ok", "yeah", "mhm") kill the answer!
+  // Shield active answer from premature interruptions:
+  // If an answer is currently streaming, don't let casual remarks, acknowledgments, or conversational chatter kill it!
   const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
-  if (isCurrentlyStreaming && wordCount <= 3 && !isQuestionStarter) {
-    console.log(`[Noise Filter] Ignored fragment "${trimmed}" while answer is streaming to prevent interruption.`);
-    return;
+  if (isCurrentlyStreaming) {
+    const isExplicitQuestion = trimmed.endsWith('?') || /^(what|how|why|where|when|who|which|can you|could you|explain|implement|write|is there|are there|does this|will this)\b/i.test(trimmed);
+    const isFillerOrChatter = /^(ok|okay|yeah|yes|no|got it|sure|alright|thanks|thank you|cool|great|understood|makes sense|i see|right|mhm|uh|um|hmm|perfect|nice|fine)\b/i.test(trimmed);
+
+    // If it's filler, or under 6 words without a clear question structure, ignore it to protect the streaming answer!
+    if (isFillerOrChatter || (!isExplicitQuestion && wordCount < 6)) {
+      console.log(`[Streaming Shield] Ignored chatter "${trimmed}" while answer is streaming to protect active generation.`);
+      return;
+    }
   }
 
   // Deduplicate by question hash
@@ -512,16 +526,23 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     sessionId
   });
 
-  // Abort any in-progress generation
+  // Finalize or abort any in-progress generation gracefully
   if (session.activeAbort) {
     session.activeAbort.abort();
     session.activeAbort = null;
     const inProgress = [...session.messages].reverse().find(m => m.role === 'answer' && m.status === 'streaming');
     if (inProgress) {
-      inProgress.status = 'interrupted';
+      // If the answer has already generated substantial text (> 80 chars), preserve it as complete!
+      // This prevents the candidate from seeing an annoying yellow "Interrupted" badge on a readable answer.
+      const hasSubstantialText = (inProgress.text || '').trim().length > 80;
+      inProgress.status = hasSubstantialText ? 'complete' : 'interrupted';
+      inProgress.totalTime = inProgress.totalTime || (Date.now() - (inProgress.createdAt || Date.now()));
+
       broadcastToSession(sessionId, {
-        type: 'chat_interrupted',
+        type: hasSubstantialText ? 'chat_done' : 'chat_interrupted',
         msgId: inProgress.id,
+        fullText: inProgress.text,
+        totalTime: inProgress.totalTime,
         sessionId
       });
     }
@@ -588,7 +609,13 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     return;
   }
 
-  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+  const models = [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'mixtral-8x7b-32768',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b'
+  ];
   const groq = new Groq({ apiKey: groqKey });
 
   for (const model of models) {
@@ -675,8 +702,9 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
       const status = err.status || err.statusCode;
 
       if (status === 429) {
-        // Rate limit — log and try next model or wait briefly
-        console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model...`);
+        // Rate limit — log and try next high-throughput model with brief backoff
+        console.warn(`[Groq] Rate limit 429 on model ${model}, trying fast fallback model...`);
+        await new Promise(r => setTimeout(r, 150));
         continue;
       }
 
@@ -992,6 +1020,14 @@ wss.on('connection', (ws) => {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
             if (full && !acc.isIncomplete(full)) {
+              // If an answer is currently streaming, don't commit silence events for casual chatter
+              const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
+              if (isCurrentlyStreaming) {
+                const isExplicitQ = full.endsWith('?') || /^(what|how|why|where|when|who|which|can you|could you|explain|write|implement|is there|does this)\b/i.test(full);
+                if (!isExplicitQ && full.split(/\s+/).length < 6) {
+                  return; // Don't interrupt streaming answer on quiet pauses/chatter
+                }
+              }
               const words = acc.consumeWords();
               const committed = acc.forceCommit();
               if (committed) commitQuestion(sessionId, committed, session, words, committed);
