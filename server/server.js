@@ -12,6 +12,47 @@ const Groq = require('groq-sdk');
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
 
+// ─────────────────────────────────────────────────────────────
+//  Groq Models Configuration & Dynamic Health Discovery
+// ─────────────────────────────────────────────────────────────
+const DEFAULT_GROQ_MODELS = [
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b'
+];
+
+let activeGroqModels = [...DEFAULT_GROQ_MODELS];
+
+async function refreshGroqModels(apiKey) {
+  if (!apiKey) return;
+  try {
+    const groqClient = new Groq({ apiKey });
+    const list = await groqClient.models.list();
+    const available = new Set(list.data.map(m => m.id));
+
+    // Keep prioritized order of available models
+    const matched = DEFAULT_GROQ_MODELS.filter(m => available.has(m));
+    if (matched.length > 0) {
+      activeGroqModels = matched;
+      console.log(`[Groq] Validated active models: ${activeGroqModels.join(', ')}`);
+    } else {
+      // Fallback: pick any chat models available
+      const chatModels = list.data
+        .map(m => m.id)
+        .filter(id => !id.includes('whisper') && !id.includes('guard'));
+      if (chatModels.length > 0) {
+        activeGroqModels = chatModels.slice(0, 3);
+        console.log(`[Groq] Fallback detected models: ${activeGroqModels.join(', ')}`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[Groq] Dynamic model discovery notice: ${err.message}. Using default list.`);
+  }
+}
+
+// Initial discovery
+refreshGroqModels(process.env.GROQ_API_KEY);
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -138,10 +179,56 @@ function getOrCreateSession(sessionId) {
 //  TranscriptAccumulator
 //  Collects Deepgram fragments → commits complete questions
 // ─────────────────────────────────────────────────────────────
+//  Chatter & Background Audio Filtering / Question Detection
 // ─────────────────────────────────────────────────────────────
-const INCOMPLETE_PHRASES = [];
+const CHATTER_REGEX = /\b(thank you|thanks a lot|thanks|bye|goodbye|i'm not well|i am not well|i don't know|i don't have|i'm calling|i am calling|her phone|my phone|seven seven seven|let's see|hold on|wait a second|wait a minute|pardon me|excuse me|can you hear me|am i audible|testing|in two rev|heading)\b/i;
 
-const NOISE_ONLY = /^(uh+|um+|hmm+|mm+|okay+|yes+|no+|right|sure|alright|okay then|mhm+)[\s.,!?]*$/i;
+const PURE_NOISE_OR_FILLER = /^(uh+|um+|hmm+|mm+|okay+|yes+|no+|right|sure|alright|okay then|mhm+|yeah+|nope+|yep+|cool|nice|fine|sorry|hello|hi|bye|thanks|thank you|good|understood|heading)[\s.,!?]*$/i;
+
+const QUESTION_INTENT_REGEX = /(^|\b)(what|why|how|where|when|which|who|whose|whom|can you|could you|would you|will you|should we|shall we|do you|did you|have you|are you|is it|is there|are there|does it|does this|will this|write|implement|explain|describe|compare|differentiate|discuss|optimize|solve|calculate|design|create|build|walk me through|show me|give me|rewrite|find|fix|debug|refactor)\b/i;
+
+const TECH_TOPIC_REGEX = /\b(sql|query|database|table|index|join|spark|pyspark|databricks|delta lake|dataframe|react|redux|node|javascript|typescript|python|algorithm|complexity|array|list|hashmap|tree|graph|binary search|duplicate|duplicates|palindrome|reverse|recursion|memo|decorator|promise|async|await|event loop|microtask|closure|docker|kubernetes|aws|azure|kafka|rest api|graphql|dense_rank|partition)\b/i;
+
+const INCOMPLETE_TRAILING = /(?:for|to|in|with|using|without|and|or|by|from|of|about|that|like|a|an)\s*$/i;
+
+function isPureChatterOrNoise(text) {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return true;
+  if (PURE_NOISE_OR_FILLER.test(trimmed)) return true;
+
+  const hasQuestionIntent = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
+  const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
+
+  // If the speech has NO question intent AND NO technical topic, it is not an interview question!
+  // This cleanly filters out background phone conversations, stray chatter, and room noise.
+  if (!hasQuestionIntent && !hasTechTopic) {
+    return true;
+  }
+
+  // If short and contains conversational chatter phrases
+  if (CHATTER_REGEX.test(trimmed) && !hasTechTopic && !trimmed.endsWith('?')) {
+    return true;
+  }
+
+  return false;
+}
+
+function sanitizeQuestionText(text) {
+  let cleaned = (text || '').trim();
+  if (!cleaned) return '';
+
+  // Strip trailing polite / phone chatter from real questions
+  // e.g., "Write a python program to find duplicate values... Thank you. In two Rev, Heading" -> "Write a python program to find duplicate values..."
+  const trailingChatterMatch = cleaned.match(/^(.*?[.?])\s+(?:thank you|thanks|bye|goodbye|i'm calling|her phone|i don't know|in two rev|heading).*$/i);
+  if (trailingChatterMatch && trailingChatterMatch[1].length >= 15) {
+    cleaned = trailingChatterMatch[1].trim();
+  }
+
+  // Strip trailing noise punctuation or filler words like "Right.", "Let's", etc.
+  cleaned = cleaned.replace(/\s+(?:let's|heading|right|ok|okay)[\s.,!?]*$/i, '').trim();
+
+  return cleaned;
+}
 
 class TranscriptAccumulator {
   constructor(sessionId) {
@@ -151,31 +238,30 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
-    this.SETTLE_MS = 2000;    // settle after 2.0s of quiet (prevents cutting off speech)
-    this.WINDOW_MS = 15000;   // 15-second question accumulation window
+    this.SETTLE_MS = 1800;    // settle after 1.8s of quiet
+    this.WINDOW_MS = 10000;   // 10-second question accumulation window max
   }
 
   _getDynamicSettleMs() {
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
-    // If an answer is currently streaming, allow 2600ms of quiet before settling to protect the active answer
-    return isStreaming ? 2600 : this.SETTLE_MS;
+    // If an answer is currently streaming, allow 2400ms of quiet before settling to protect the active answer
+    return isStreaming ? 2400 : this.SETTLE_MS;
   }
 
   isIncomplete(text) {
-    const t = text.trim();
+    const t = (text || '').trim();
     if (!t) return true;
-    return INCOMPLETE_PHRASES.some(re => re.test(t));
+    return INCOMPLETE_TRAILING.test(t);
   }
 
   isNoiseOnly(text) {
-    return NOISE_ONLY.test(text.trim());
+    return isPureChatterOrNoise(text);
   }
 
   addInterim(text) {
     if (!this.speechStartTime) this.speechStartTime = Date.now();
     this.interim = text;
-    // Debounce settle timer while speaker is active
     this._scheduleSettle(this._getDynamicSettleMs());
   }
 
@@ -198,14 +284,13 @@ class TranscriptAccumulator {
     if (speechFinal) {
       // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to window
       if (this.isIncomplete(this.committed)) {
-        const remaining = Math.max(1400, this.WINDOW_MS - elapsed);
+        const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
         this._scheduleSettle(remaining);
         return null;
       }
       this._clearSettle();
       return this._commit();
     } else {
-      // is_final received but not end of utterance yet -> debounce settle
       this._scheduleSettle(this._getDynamicSettleMs());
     }
     return null;
@@ -237,11 +322,10 @@ class TranscriptAccumulator {
     this.settleTimer = setTimeout(() => {
       const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
 
-      // If trailing word is a preposition/connector and within the 5s speech window, wait longer!
       if (this.isIncomplete(full)) {
         const elapsed = this.speechStartTime ? Date.now() - this.speechStartTime : 0;
         if (elapsed < this.WINDOW_MS) {
-          this._scheduleSettle(1200);
+          this._scheduleSettle(1000);
           return;
         }
       }
@@ -253,7 +337,7 @@ class TranscriptAccumulator {
 
       if (full && !this.isNoiseOnly(full)) {
         const session = sessions.get(this.sessionId);
-        if (session) commitQuestion(this.sessionId, full, session, words, full);
+        if (session) commitQuestion(this.sessionId, full, session, words, full, false);
       }
     }, ms || this.SETTLE_MS);
   }
@@ -265,6 +349,7 @@ class TranscriptAccumulator {
     }
   }
 }
+
 
 // ─────────────────────────────────────────────────────────────
 //  Context builder — multi-turn conversation history & language continuity
@@ -425,20 +510,29 @@ function notifyPeerStatus(sessionId) {
 // ─────────────────────────────────────────────────────────────
 //  Commit a question → start answer generation
 // ─────────────────────────────────────────────────────────────
-function commitQuestion(sessionId, questionText, session, words = [], rawTranscript = null) {
-  const trimmed = questionText.trim();
+function commitQuestion(sessionId, questionText, session, words = [], rawTranscript = null, isManual = false) {
+  const sanitized = sanitizeQuestionText(questionText);
+  const trimmed = sanitized.trim();
   if (!trimmed) return;
+
+  // Filter out stray background noise, phone speech, and non-questions unless manually triggered by user
+  if (!isManual && isPureChatterOrNoise(trimmed)) {
+    console.log(`[Audio Shield] Discarded non-question background chatter: "${trimmed}"`);
+    return;
+  }
 
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
-
   const wordCount = trimmed.split(/\s+/).length;
-  const isQuestionStarter = /^(what|why|how|explain|can you|write|implement|tell me|describe)\b/i.test(trimmed);
 
-  // ── 15-Second Stitching & Follow-up Completion Rule ──
+  // ── Stitching Rule (ONLY for genuine incomplete questions or explicit qualifiers within 6s) ──
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
-  const isContinuation = timeSinceLastQ < 15000 && (!isQuestionStarter || wordCount <= 4);
+
+  const lastWasIncomplete = lastQ && INCOMPLETE_TRAILING.test(lastQ.text.trim());
+  const isExplicitContinuation = /^(without using|using|in python|in sql|in typescript|in java|and how many|and also|with time complexity|with o\()/i.test(trimmed);
+
+  const isContinuation = timeSinceLastQ < 6000 && (lastWasIncomplete || isExplicitContinuation);
 
   if (lastQ && isContinuation) {
     // Abort previous partial answer
@@ -482,15 +576,15 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   }
 
   // Shield active answer from premature interruptions:
-  // If an answer is currently streaming, don't let casual remarks, acknowledgments, or conversational chatter kill it!
+  // If an answer is currently streaming, don't let casual remarks or small chatter kill it!
   const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
-  if (isCurrentlyStreaming) {
-    const isExplicitQuestion = trimmed.endsWith('?') || /^(what|how|why|where|when|who|which|can you|could you|explain|implement|write|is there|are there|does this|will this)\b/i.test(trimmed);
-    const isFillerOrChatter = /^(ok|okay|yeah|yes|no|got it|sure|alright|thanks|thank you|cool|great|understood|makes sense|i see|right|mhm|uh|um|hmm|perfect|nice|fine)\b/i.test(trimmed);
+  if (isCurrentlyStreaming && !isManual) {
+    const isExplicitQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
+    const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
 
-    // If it's filler, or under 6 words without a clear question structure, ignore it to protect the streaming answer!
-    if (isFillerOrChatter || (!isExplicitQuestion && wordCount < 6)) {
-      console.log(`[Streaming Shield] Ignored chatter "${trimmed}" while answer is streaming to protect active generation.`);
+    // If it lacks clear question intent or is under 5 words without technical terms, ignore it to protect the streaming answer!
+    if (!isExplicitQuestion && !hasTechTopic) {
+      console.log(`[Streaming Shield] Ignored speech "${trimmed}" while answer is streaming to protect active generation.`);
       return;
     }
   }
@@ -609,111 +703,127 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     return;
   }
 
-  const models = [
-    'llama-3.3-70b-versatile',
-    'llama-3.1-8b-instant',
-    'mixtral-8x7b-32768',
-    'openai/gpt-oss-120b',
-    'openai/gpt-oss-20b'
-  ];
   const groq = new Groq({ apiKey: groqKey });
+  const candidateModels = activeGroqModels.length > 0 ? activeGroqModels : DEFAULT_GROQ_MODELS;
 
-  for (const model of models) {
-    if (abort.signal.aborted) break;
+  let succeeded = false;
+  let lastError = null;
 
-    try {
-      const stream = await groq.chat.completions.create({
-        messages: chatMessages,
-        model,
-        temperature: 0.25,
-        max_tokens: 800,
-        stream: true
-      }, { signal: abort.signal });
+  // Pass 1: Try each model with 400ms rate-limit backoff
+  // Pass 2: If rate limited on all models, wait 800ms for quota replenishment and retry
+  for (let pass = 0; pass < 2 && !succeeded; pass++) {
+    for (const model of candidateModels) {
+      if (abort.signal.aborted) break;
 
-      let seqNo = 0;
-      let accumulated = continueFromText;
-      let ttftSent = false;
+      try {
+        const stream = await groq.chat.completions.create({
+          messages: chatMessages,
+          model,
+          temperature: 0.25,
+          max_tokens: 1200,
+          stream: true
+        }, { signal: abort.signal });
 
-      for await (const chunk of stream) {
-        if (abort.signal.aborted) break;
+        let seqNo = 0;
+        let accumulated = continueFromText;
+        let ttftSent = false;
 
-        // Reject if session moved to a new request
-        if (session.activeReqId !== reqId) break;
+        for await (const chunk of stream) {
+          if (abort.signal.aborted) break;
 
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (!text) continue;
+          // Reject if session moved to a new request
+          if (session.activeReqId !== reqId) break;
 
-        accumulated += text;
-        aMsg.text = accumulated;
+          const text = chunk.choices[0]?.delta?.content || '';
+          if (!text) continue;
 
-        if (!ttftSent) {
-          ttftSent = true;
-          aMsg.ttft = Date.now() - startTime;
+          accumulated += text;
+          aMsg.text = accumulated;
+
+          if (!ttftSent) {
+            ttftSent = true;
+            aMsg.ttft = Date.now() - startTime;
+            broadcastToSession(sessionId, {
+              type: 'chat_start',
+              msgId: aMsgId,
+              reqId,
+              ttft: aMsg.ttft,
+              sessionId
+            });
+          }
+
           broadcastToSession(sessionId, {
-            type: 'chat_start',
+            type: 'chat_chunk',
             msgId: aMsgId,
             reqId,
-            ttft: aMsg.ttft,
+            seqNo: seqNo++,
+            chunk: text,
+            fullText: accumulated,
             sessionId
           });
         }
 
-        broadcastToSession(sessionId, {
-          type: 'chat_chunk',
-          msgId: aMsgId,
-          reqId,
-          seqNo: seqNo++,
-          chunk: text,
-          fullText: accumulated,
-          sessionId
-        });
-      }
+        if (!abort.signal.aborted && session.activeReqId === reqId) {
+          const totalTime = Date.now() - startTime;
+          aMsg.status = 'complete';
+          aMsg.totalTime = totalTime;
 
-      if (!abort.signal.aborted && session.activeReqId === reqId) {
-        const totalTime = Date.now() - startTime;
-        aMsg.status = 'complete';
-        aMsg.totalTime = totalTime;
+          // Remember code language used so subsequent follow-ups stay in this language
+          const codeLangMatch = accumulated.match(/```(\w+)/);
+          if (codeLangMatch && codeLangMatch[1]) {
+            session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
+          }
 
-        // Remember code language used so subsequent follow-ups stay in this language
-        const codeLangMatch = accumulated.match(/```(\w+)/);
-        if (codeLangMatch && codeLangMatch[1]) {
-          session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
+          broadcastToSession(sessionId, {
+            type: 'chat_done',
+            msgId: aMsgId,
+            reqId,
+            fullText: accumulated,
+            totalTime,
+            sessionId
+          });
+
+          // Reset pending hash so same question can be re-asked later
+          session.pendingQuestionHash = null;
+          session.activeReqId = null;
+          session.activeAbort = null;
+        }
+        succeeded = true;
+        return; // success — exit model loop
+
+      } catch (err) {
+        lastError = err;
+        if (abort.signal.aborted) break;
+
+        const status = err.status || err.statusCode;
+
+        if (status === 404 || status === 400) {
+          console.warn(`[Groq] Model ${model} unavailable (${status}). Pruning from active models.`);
+          activeGroqModels = activeGroqModels.filter(m => m !== model);
+          continue;
         }
 
-        broadcastToSession(sessionId, {
-          type: 'chat_done',
-          msgId: aMsgId,
-          reqId,
-          fullText: accumulated,
-          totalTime,
-          sessionId
-        });
+        if (status === 429) {
+          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 400ms...`);
+          await new Promise(r => setTimeout(r, 400));
+          continue;
+        }
 
-        // Reset pending hash so same question can be re-asked later
-        session.pendingQuestionHash = null;
-        session.activeReqId = null;
-        session.activeAbort = null;
+        if (status === 401) {
+          console.warn(`[Groq] 401 Auth error. Falling back to local responder.`);
+          break; // break to fallback
+        }
+
+        console.warn(`[Groq] Model ${model} error: ${err.message}. Trying next model...`);
       }
-      return; // success — exit model loop
+    }
 
-    } catch (err) {
-      if (abort.signal.aborted) break;
-
-      const status = err.status || err.statusCode;
-
-      if (status === 429) {
-        // Rate limit — log and try next high-throughput model with brief backoff
-        console.warn(`[Groq] Rate limit 429 on model ${model}, trying fast fallback model...`);
-        await new Promise(r => setTimeout(r, 150));
-        continue;
+    if (!succeeded && pass === 0 && !abort.signal.aborted) {
+      const isRateLimit = lastError && (lastError.status === 429 || lastError.statusCode === 429);
+      if (isRateLimit) {
+        console.warn(`[Groq] Temporary rate limit on all models. Backing off 800ms before retry...`);
+        await new Promise(r => setTimeout(r, 800));
       }
-
-      if (status === 401) {
-        console.warn(`[Groq] 401 Auth error. Falling back to local responder.`);
-        break; // break to fallback
-      }
-
-      console.warn(`[Groq] Model ${model} error: ${err.message}. Trying next model...`);
     }
   }
 
@@ -752,8 +862,18 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
   let text = prefix;
   let answer = '';
 
-  if (q.includes('sql') || q.includes('query') || q.includes('salary') || q.includes('database')) {
+  if (q.includes('duplicate') || (q.includes('python') && (q.includes('list') || q.includes('array')))) {
+    if (q.includes('without') && (q.includes('count') || q.includes('counter') || q.includes('set') || q.includes('predefined'))) {
+      answer = `To find duplicates and their counts without using predefined functions like Counter, count, or set, use a manual hash map (dictionary) in a single pass.\n\n\`\`\`python\ndef find_duplicates(items):\n    counts = {}\n    duplicates = {}\n    \n    # Count frequencies manually\n    for item in items:\n        if item in counts:\n            counts[item] += 1\n        else:\n            counts[item] = 1\n            \n    # Filter items that appear more than once\n    for item, freq in counts.items():\n        if freq > 1:\n            duplicates[item] = freq\n            \n    return duplicates\n\`\`\`\n\nThis operates in O(n) time and O(k) auxiliary space where k is unique values, strictly without Counter or set.`;
+    } else {
+      answer = `To find duplicates and their counts in a list, count frequencies with a dictionary and collect elements that appear more than once.\n\n\`\`\`python\ndef find_duplicates(items):\n    counts = {}\n    for item in items:\n        counts[item] = counts.get(item, 0) + 1\n    return {k: v for k, v in counts.items() if v > 1}\n\`\`\`\n\nThis scans the input once in O(n) time and returns each duplicate alongside its frequency.`;
+    }
+  } else if (q.includes('sql') || q.includes('salary') || q.includes('dense_rank') || q.includes('second highest')) {
     answer = `To find the second-highest salary per department while handling ties, use the DENSE_RANK() window function.\n\n\`\`\`sql\nSELECT department, employee_name, salary\nFROM (\n  SELECT department, employee_name, salary,\n         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk\n  FROM employees\n  WHERE salary IS NOT NULL\n) ranked\nWHERE rnk = 2;\n\`\`\`\n\nThe inner query ranks employees by salary within each department without skipping rank numbers when ties occur. The outer query filters for rank 2 to return all second-highest earners cleanly.`;
+  } else if (q.includes('spa') || q.includes('single page')) {
+    answer = `A single-page application (SPA) loads the HTML, CSS, and JavaScript assets once, then updates the view dynamically without full page reloads.\n\nAll navigation happens client-side via JavaScript routing and the browser history API, while data is exchanged with backend APIs. This gives the app a responsive desktop feel and minimizes network bandwidth.`;
+  } else if (q.includes('databricks') || q.includes('incremental') || q.includes('delta')) {
+    answer = `Incremental data loading in Databricks uses Delta Lake change tracking and checkpointing to process only newly arrived records.\n\n\`\`\`python\n# Read new data using checkpoint offset\nnew_df = spark.read.format("delta").table("source_telemetry") \\\n    .filter("event_timestamp > (SELECT coalesce(max(last_sync), '1970-01-01') FROM sync_checkpoints)")\n\n# Merge incrementally into destination\nfrom delta.tables import DeltaTable\ntarget = DeltaTable.forName(spark, "target_lakehouse")\ntarget.alias("t").merge(\n    new_df.alias("s"),\n    "t.id = s.id"\n).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()\n\`\`\`\n\nThis eliminates full table scans, keeping pipelines fast and cost-effective.`;
   } else if (q.includes('react') || q.includes('virtual dom') || q.includes('usememo')) {
     answer = `React's Virtual DOM is a lightweight memory representation of the real DOM. When state changes, React compares the new tree with the old one and updates only the changed DOM elements.\n\n- useMemo caches calculated values across renders\n- useCallback preserves function references to avoid child re-renders\n- Keys help React track which items were added or moved`;
   } else if (q.includes('node') || q.includes('event loop')) {
@@ -762,8 +882,7 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
     answer = `A broadcast join copies a small table to all worker nodes so the large table can be joined locally without network shuffling.\n\nUse it when the smaller table fits comfortably in executor memory, typically under 10MB to a few hundred megabytes in Spark. Avoid broadcasting large tables because it can overwhelm driver and executor memory.`;
   } else {
     const cleanQ = question.replace(/^(what is|how do|explain|tell me about)\s+/i, '').trim();
-    const topic = cleanQ ? cleanQ.charAt(0).toUpperCase() + cleanQ.slice(1) : 'This problem';
-    answer = `${topic} is best approached by breaking the task into simple, testable steps.\n\nStart directly with the core solution and keep the implementation readable and standard. In my experience, straightforward solutions are easier to maintain, review, and debug.`;
+    answer = `For ${cleanQ || 'this technical problem'}, the standard production approach balances efficiency and code clarity.\n\nStart with a straightforward solution using standard library primitives, validate boundary conditions, and ensure clean separation of concerns.`;
   }
 
   const fullAnswer = text + answer;
@@ -1008,7 +1127,7 @@ wss.on('connection', (ws) => {
             if (isFinal) {
               const committed = session.transcriptAccumulator.addFinal(transcript, speechFinal, words);
               if (committed) {
-                commitQuestion(sessionId, committed, session, session.transcriptAccumulator.consumeWords(), committed);
+                commitQuestion(sessionId, committed, session, session.transcriptAccumulator.consumeWords(), committed, false);
               }
             } else {
               session.transcriptAccumulator.addInterim(transcript);
@@ -1023,14 +1142,14 @@ wss.on('connection', (ws) => {
               // If an answer is currently streaming, don't commit silence events for casual chatter
               const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
               if (isCurrentlyStreaming) {
-                const isExplicitQ = full.endsWith('?') || /^(what|how|why|where|when|who|which|can you|could you|explain|write|implement|is there|does this)\b/i.test(full);
+                const isExplicitQ = full.endsWith('?') || QUESTION_INTENT_REGEX.test(full);
                 if (!isExplicitQ && full.split(/\s+/).length < 6) {
                   return; // Don't interrupt streaming answer on quiet pauses/chatter
                 }
               }
               const words = acc.consumeWords();
               const committed = acc.forceCommit();
-              if (committed) commitQuestion(sessionId, committed, session, words, committed);
+              if (committed) commitQuestion(sessionId, committed, session, words, committed, false);
             }
           }
         } catch (e) {
@@ -1143,7 +1262,7 @@ wss.on('connection', (ws) => {
 
           if (data.isFinal) {
             const committed = session.transcriptAccumulator.addFinal(data.transcript, false);
-            if (committed) commitQuestion(currentSessionId, committed, session);
+            if (committed) commitQuestion(currentSessionId, committed, session, [], committed, false);
           } else {
             session.transcriptAccumulator.addInterim(data.transcript);
           }
@@ -1163,7 +1282,7 @@ wss.on('connection', (ws) => {
             session.transcriptAccumulator.committed = '';
             session.transcriptAccumulator.interim = '';
             session.transcriptAccumulator._clearSettle();
-            commitQuestion(currentSessionId, q, session);
+            commitQuestion(currentSessionId, q, session, [], null, true);
           }
           break;
         }
@@ -1191,7 +1310,7 @@ wss.on('connection', (ws) => {
           }
           if (q) {
             session.pendingQuestionHash = null;
-            commitQuestion(currentSessionId, `Explain in more detail with clear steps and examples: ${q}`, session);
+            commitQuestion(currentSessionId, `Explain in more detail with clear steps and examples: ${q}`, session, [], null, true);
           }
           break;
         }
