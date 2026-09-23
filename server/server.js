@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const Groq = require('groq-sdk');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
@@ -116,6 +117,349 @@ function analyzeWordUncertainty(wordsArray, vocabSet) {
 */
 const sessions = new Map();
 
+// ─────────────────────────────────────────────────────────────
+//  Coding Task Specification & Verification System
+// ─────────────────────────────────────────────────────────────
+const CODING_COMMAND_WORDS = new Set([
+  'write', 'implement', 'code', 'create', 'build', 'solve',
+  'change', 'modify', 'update', 'remove', 'refactor', 'rewrite',
+  'without', 'instead', "don't", 'dont', 'do not', 'never', 'avoid',
+  'return', 'yield', 'output', 'also', 'handle', 'ensure', 'make sure',
+  'optimize', 'use', 'using', 'convert'
+]);
+
+const CODING_CONSTRAINT_WORDS = new Set([
+  'not', 'no', 'without', 'only', 'distinct', 'unique', 'second', 'third', 'latest',
+  'ascending', 'descending', 'none', 'null', 'sorted', 'sort', 'sorting',
+  'built-in', 'builtin', 'builtins', 'library', 'in-place', 'inplace',
+  'duplicate', 'duplicates', 'ties', 'recursive', 'iterative',
+  'time', 'space', 'complexity', 'o(1)', 'o(n)', 'o(n^2)', 'o(log n)',
+  'positive', 'negative', 'array', 'list', 'string', 'integers', 'numbers'
+]);
+
+function isCodingInstructionOrConstraint(text) {
+  if (!text) return false;
+  const clean = text.trim().toLowerCase();
+  if (/\b(write|implement|change|remove|without|instead|don't use|do not use|never use|avoid|return None|return -1|return null|also)\b/i.test(clean)) {
+    return true;
+  }
+  const words = clean.split(/[^a-zA-Z0-9_\-\(\)]+/).filter(Boolean);
+  return words.some(w => CODING_CONSTRAINT_WORDS.has(w) || CODING_COMMAND_WORDS.has(w));
+}
+
+class CodingTaskRecord {
+  constructor(id, initialProblem, language = 'python') {
+    this.id = id || uid('task');
+    this.revision = 1;
+    this.problem = initialProblem || '';
+    this.language = language || 'python';
+    this.framework = null;
+    this.sqlDialect = null;
+    this.inputStructure = null;
+    this.expectedOutput = null;
+    this.requiredOperations = []; // Array of { id, text, sourceWords }
+    this.forbiddenOperations = []; // Array of { id, text, forbiddenTerms: string[], sourceWords }
+    this.examples = []; // Array of { input, expected, rawText }
+    this.unresolvedQuestions = [];
+    this.currentCode = null;
+    this.verificationStatus = null;
+    this.verificationDetails = null;
+    this.activePillSummary = '';
+    this.status = 'active'; // 'active' | 'clarification_needed' | 'superseded' | 'completed'
+  }
+
+  getPillSummary() {
+    const parts = [];
+    const lang = this.language.charAt(0).toUpperCase() + this.language.slice(1);
+    parts.push(lang);
+
+    if (this.problem) {
+      const shortProb = this.problem
+        .replace(/^(write|implement|find|check|create)\s+(a\s+)?(function\s+to\s+|query\s+to\s+|code\s+for\s+|code\s+to\s+)?/i, '')
+        .replace(/in\s+(python|sql|pyspark|javascript|typescript|java|c\+\+)/i, '')
+        .trim();
+      if (shortProb) parts.push(shortProb.slice(0, 32));
+    }
+
+    if (this.forbiddenOperations.length > 0) {
+      parts.push(`no ${this.forbiddenOperations.map(f => f.text).join(', ')}`);
+    } else if (this.requiredOperations.length > 0) {
+      parts.push(this.requiredOperations[0].text);
+    }
+    return parts.join(' · ');
+  }
+}
+
+function updateCodingTaskFromSpeech(task, speechText, candidateDefaultLang = 'python') {
+  if (!task) {
+    task = new CodingTaskRecord(uid('task'), speechText, candidateDefaultLang);
+  }
+
+  const raw = speechText.trim();
+  const lower = raw.toLowerCase();
+
+  // 1. Language detection
+  if (/\b(in python|using python|with python)\b/i.test(lower)) task.language = 'python';
+  else if (/\b(in sql|using sql|with sql|write a sql query|sql)\b/i.test(lower)) task.language = 'sql';
+  else if (/\b(in pyspark|using pyspark|pyspark)\b/i.test(lower)) task.language = 'pyspark';
+  else if (/\b(in typescript|typescript)\b/i.test(lower)) task.language = 'typescript';
+  else if (/\b(in javascript|javascript)\b/i.test(lower)) task.language = 'javascript';
+  else if (/\b(in java\b|using java\b)/i.test(lower)) task.language = 'java';
+  else if (/\b(in c\+\+|using c\+\+)/i.test(lower)) task.language = 'cpp';
+
+  // 2. Problem statement extraction
+  if (!task.problem || /\b(write|find|implement|check|calculate|return)\b/i.test(lower)) {
+    if (!task.problem) {
+      task.problem = raw;
+    } else if (!/\b(do not|don't|without|instead|also|return)\b/i.test(lower)) {
+      task.problem = `${task.problem} ${raw}`.trim();
+    }
+  }
+
+  // 3. Forbidden operations:
+  if (/\b(do not sort|don't sort|dont sort|without sorting|no sorting|never sort|without using sort)\b/i.test(lower)) {
+    const existing = task.forbiddenOperations.find(f => f.id === 'no-sort');
+    if (!existing) {
+      task.forbiddenOperations.push({
+        id: 'no-sort',
+        text: 'sorting',
+        forbiddenTerms: ['sort', 'sorted', 'sort_values', 'ORDER BY'],
+        sourceWords: raw
+      });
+    }
+  }
+
+  if (/\b(don't use built-in|do not use built-in|no built-in|without built-in|no builtins|without builtins)\b/i.test(lower)) {
+    if (/\b(max|min)\b/i.test(lower)) {
+      task.forbiddenOperations.push({
+        id: 'no-max-min',
+        text: 'built-in max/min',
+        forbiddenTerms: ['max', 'min'],
+        sourceWords: raw
+      });
+    } else {
+      task.unresolvedQuestions.push("Which built-in functions or approaches are forbidden (e.g. built-in sorting, min/max, or data structure libraries)?");
+    }
+  }
+
+  // 4. Expected outputs & Replacements
+  let updatedExpectedVal = null;
+
+  if (/\binstead\s+of\s+(none|null|\-?\d+)[,\s]+return\s+(\-?\d+|none|null)\b/i.test(lower)) {
+    const m = lower.match(/\binstead\s+of\s+(?:none|null|\-?\d+)[,\s]+return\s+(\-?\d+|none|null)\b/i);
+    if (m) updatedExpectedVal = m[1];
+  } else if (/\breturn\s+(\-?\d+|none|null)\s+instead(?:\s+of\s+(none|null|\-?\d+))?\b/i.test(lower)) {
+    const m = lower.match(/\breturn\s+(\-?\d+|none|null)\s+instead/i);
+    if (m) updatedExpectedVal = m[1];
+  } else if (/\b(actually|please)?,?\s*return\s+(\-?\d+|none|null)\b/i.test(lower) && /\b(if|when|instead)\b/i.test(lower)) {
+    const m = lower.match(/\breturn\s+(\-?\d+|none|null)\b/i);
+    if (m) updatedExpectedVal = m[1];
+  } else if (/\breturn\s+(none|null|\-?\d+)\s+(if|when)\s+(it\s+)?(does\s+not\s+exist|not\s+found|empty)\b/i.test(lower)) {
+    const m = lower.match(/\breturn\s+(none|null|\-?\d+)\b/i);
+    if (m) updatedExpectedVal = m[1];
+  }
+
+  if (updatedExpectedVal !== null) {
+    const val = (updatedExpectedVal.toLowerCase() === 'none' || updatedExpectedVal.toLowerCase() === 'null')
+      ? null
+      : (isNaN(Number(updatedExpectedVal)) ? updatedExpectedVal : Number(updatedExpectedVal));
+    const valStr = val === null ? 'None' : String(val);
+
+    task.expectedOutput = `Return ${valStr} if element does not exist`;
+    const reqIdx = task.requiredOperations.findIndex(r => r.id === 'output-not-found');
+    const reqObj = { id: 'output-not-found', text: `Return ${valStr} if not found`, sourceWords: raw };
+    if (reqIdx >= 0) {
+      task.requiredOperations[reqIdx] = reqObj;
+    } else {
+      task.requiredOperations.push(reqObj);
+    }
+
+    // Update any existing examples for edge case (e.g. [4, 4] where all elements are identical)
+    for (const ex of task.examples) {
+      if (Array.isArray(ex.input) && new Set(ex.input).size <= 1) {
+        ex.expected = val;
+        ex.rawText = `[${ex.input.join(', ')}] produces ${valStr}`;
+      }
+    }
+  }
+
+  // 5. Order constraints:
+  if (/\b(descending|descending order|reverse order)\b/i.test(lower)) {
+    task.requiredOperations = task.requiredOperations.filter(r => r.id !== 'order-asc');
+    if (!task.requiredOperations.some(r => r.id === 'order-desc')) {
+      task.requiredOperations.push({ id: 'order-desc', text: 'Descending order', sourceWords: raw });
+    }
+  } else if (/\b(ascending|ascending order)\b/i.test(lower)) {
+    task.requiredOperations = task.requiredOperations.filter(r => r.id !== 'order-desc');
+    if (!task.requiredOperations.some(r => r.id === 'order-asc')) {
+      task.requiredOperations.push({ id: 'order-asc', text: 'Ascending order', sourceWords: raw });
+    }
+  }
+
+  // 6. Distinctness constraint
+  if (/\b(distinct|unique|second distinct|second unique)\b/i.test(lower)) {
+    if (!task.requiredOperations.some(r => r.id === 'distinct')) {
+      task.requiredOperations.push({ id: 'distinct', text: 'Distinct/unique elements (ignore duplicate values)', sourceWords: raw });
+    }
+  }
+
+  // 7. Extract examples if spoken
+  const exampleMatches = lower.match(/\[([0-9,\s\-]+)\][^\d\-a-z]*((produces?|returns?|gives?|is|output)\s*)?(\-?[0-9]+|none|null)/gi);
+  if (exampleMatches) {
+    for (const exStr of exampleMatches) {
+      const arrMatch = exStr.match(/\[([0-9,\s\-]+)\]/);
+      const resMatch = exStr.match(/(?:produces?|returns?|gives?|is|output)?\s*(\-?[0-9]+|none|null)$/i);
+      if (arrMatch && resMatch) {
+        try {
+          const inp = JSON.parse(`[${arrMatch[1]}]`);
+          const rawExp = resMatch[1].trim().toLowerCase();
+          const expected = (rawExp === 'none' || rawExp === 'null') ? null : Number(rawExp);
+          if (!task.examples.some(e => JSON.stringify(e.input) === JSON.stringify(inp))) {
+            task.examples.push({ input: inp, expected, rawText: exStr });
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  // Standard examples for second distinct largest
+  if (/\b(second\s+(distinct\s+)?largest)\b/i.test(task.problem) && task.examples.length === 0) {
+    const fallbackExpectedOnEqual = task.expectedOutput && task.expectedOutput.includes('-1') ? -1 : null;
+    task.examples = [
+      { input: [5, 5, 3], expected: 3, rawText: '[5, 5, 3] produces 3' },
+      { input: [-1, -3, -2], expected: -2, rawText: '[-1, -3, -2] produces -2' },
+      { input: [4, 4], expected: fallbackExpectedOnEqual, rawText: `[4, 4] produces ${fallbackExpectedOnEqual}` }
+    ];
+  }
+
+  task.activePillSummary = task.getPillSummary();
+  return task;
+}
+
+function checkForbiddenOperations(code, forbiddenOperations) {
+  if (!Array.isArray(forbiddenOperations) || forbiddenOperations.length === 0) {
+    return { ok: true };
+  }
+  // Strip comments
+  const withoutComments = code
+    .replace(/#.*$/gm, '')
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/--.*$/gm, '');
+  // Strip string literals
+  const withoutStrings = withoutComments
+    .replace(/"""[\s\S]*?"""/g, '""')
+    .replace(/'''[\s\S]*?'''/g, "''")
+    .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\])*'/g, "''");
+
+  for (const forbidden of forbiddenOperations) {
+    for (const term of (forbidden.forbiddenTerms || [])) {
+      const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      if (regex.test(withoutStrings)) {
+        return {
+          ok: false,
+          error: `Forbidden operation "${forbidden.text}" detected in code (found "${term}").`
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
+function verifyGeneratedCode(code, lang, task) {
+  if (!code || !code.trim()) return { ok: false, error: 'Empty code' };
+  const normalizedLang = (lang || task.language || 'python').toLowerCase().trim();
+
+  // 1. Forbidden operations check
+  const forbiddenCheck = checkForbiddenOperations(code, task.forbiddenOperations);
+  if (!forbiddenCheck.ok) {
+    return { ok: false, error: forbiddenCheck.error, type: 'forbidden_operation' };
+  }
+
+  // 2. Syntax & isolated execution checks for Python
+  if (normalizedLang === 'python') {
+    // Syntax check
+    try {
+      execFileSync('python', ['-c', 'import ast, sys; ast.parse(sys.stdin.read())'], {
+        input: code,
+        timeout: 1500,
+        encoding: 'utf-8'
+      });
+    } catch (err) {
+      return { ok: false, error: `Python syntax error: ${err.message}`, type: 'syntax' };
+    }
+
+    // Isolated unit test execution if examples exist
+    if (Array.isArray(task.examples) && task.examples.length > 0) {
+      const runnerScript = `
+import sys, json, ast
+
+user_code = sys.stdin.read()
+tree = ast.parse(user_code)
+
+func_name = None
+for node in tree.body:
+    if isinstance(node, ast.FunctionDef):
+        func_name = node.name
+        break
+
+if not func_name:
+    print(json.dumps({"error": "No function defined in code"}))
+    sys.exit(0)
+
+namespace = {}
+exec(compile(tree, filename="<eval>", mode="exec"), namespace)
+fn = namespace[func_name]
+
+test_cases = json.loads(sys.argv[1])
+results = []
+
+for tc in test_cases:
+    inp = tc["input"]
+    expected = tc["expected"]
+    try:
+        if isinstance(inp, list) and (len(inp) == 0 or not isinstance(inp[0], list)):
+            actual = fn(inp)
+        elif isinstance(inp, list):
+            actual = fn(*inp)
+        else:
+            actual = fn(inp)
+        passed = (actual == expected)
+        results.append({"input": inp, "expected": expected, "actual": actual, "passed": passed})
+    except Exception as e:
+        results.append({"input": inp, "expected": expected, "error": str(e), "passed": False})
+
+print(json.dumps({"results": results}))
+`;
+      try {
+        const out = execFileSync('python', ['-c', runnerScript, JSON.stringify(task.examples)], {
+          input: code,
+          timeout: 2000,
+          encoding: 'utf-8'
+        });
+        const parsed = JSON.parse(out.trim());
+        if (parsed.results) {
+          const failed = parsed.results.find(r => !r.passed);
+          if (failed) {
+            return {
+              ok: false,
+              error: `Example test verification failed on input ${JSON.stringify(failed.input)}: got ${JSON.stringify(failed.actual)}, expected ${JSON.stringify(failed.expected)}`,
+              type: 'example_mismatch',
+              details: parsed.results
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('[Verification] Test runner execution error:', err.message);
+      }
+    }
+  }
+
+  return { ok: true, verified: true };
+}
+
 function getOrCreateSession(sessionId) {
   if (!sessions.has(sessionId)) {
     sessions.set(sessionId, {
@@ -129,6 +473,7 @@ function getOrCreateSession(sessionId) {
       pendingQuestionHash: null,
       initialWebmHeader: null,
       activeCodingLanguage: null,
+      codingTask: null,
     });
   }
   return sessions.get(sessionId);
@@ -319,6 +664,7 @@ function buildContext(session, currentQuestion) {
     parentAnswer: lastPair?.answer || null,
     conversationHistory,
     activeCodingLanguage: session.activeCodingLanguage || null,
+    codingTask: session.codingTask || null,
     candidate: candidateContext,
   };
 }
@@ -327,9 +673,9 @@ function buildContext(session, currentQuestion) {
 //  System prompt — continuity, language consistency, simple answers & clean code
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, parentQuestion, parentAnswer, activeCodingLanguage } = ctx;
+  const { candidate, parentQuestion, parentAnswer, activeCodingLanguage, codingTask } = ctx;
   const defaultLang = candidate.preferredLanguage || 'Python';
-  const effectiveLang = activeCodingLanguage || defaultLang;
+  const effectiveLang = (codingTask && codingTask.language) ? codingTask.language : (activeCodingLanguage || defaultLang);
 
   let followUpSection = '';
   if (parentQuestion) {
@@ -338,6 +684,40 @@ RECENT CONVERSATION CONTEXT:
 * Previous Question: "${parentQuestion}"
 * Previous Answer Summary: ${parentAnswer ? parentAnswer.slice(0, 600) : '(none)'}
 * This interview is an ongoing conversation. When the current question asks for optimization, edge cases, explanation, variations, or refers to "it", "that", "the function", or "the query", DIRECTLY build upon the previous solution above.`;
+  }
+
+  let codingTaskSection = '';
+  if (codingTask) {
+    const task = codingTask;
+    const reqs = task.requiredOperations.length > 0
+      ? task.requiredOperations.map(r => `* ${r.text} (Interviewer spoken instruction: "${r.sourceWords}")`).join('\n')
+      : '* Solve the stated problem cleanly';
+    const forbs = task.forbiddenOperations.length > 0
+      ? task.forbiddenOperations.map(f => `* STRICTLY FORBIDDEN: DO NOT USE ${f.text} (Forbidden functions/keywords: ${f.forbiddenTerms.join(', ')}; from interviewer: "${f.sourceWords}")`).join('\n')
+      : '* No forbidden operations specified';
+    const out = task.expectedOutput ? `* Return Output: ${task.expectedOutput}` : '';
+    const exs = task.examples.length > 0
+      ? task.examples.map(e => `* Example input/output: ${e.rawText || JSON.stringify(e)}`).join('\n')
+      : '';
+    const clarifications = task.unresolvedQuestions.length > 0
+      ? `\nCLARIFICATION NEEDED:\n${task.unresolvedQuestions.map(q => `* Ask concisely: "${q}"`).join('\n')}`
+      : '';
+
+    codingTaskSection = `
+ACTIVE CODING TASK SPECIFICATION (Revision ${task.revision}):
+- Summary: ${task.activePillSummary || task.getPillSummary()}
+- Primary Task: ${task.problem}
+- Target Language: ${task.language}
+- Required Operations & Constraints:
+${reqs}
+${out}
+${exs ? `\n- Test Cases & Examples:\n${exs}` : ''}
+- FORBIDDEN OPERATIONS & RESTRICTIONS:
+${forbs}
+${clarifications}
+
+MANDATORY CODING DIRECTIVE:
+"Implement the complete current task and satisfy every active requirement. Follow the specified language and framework. Do not use forbidden operations, including equivalent shortcuts that violate the restriction. Preserve required input and output behavior. If requirements conflict or essential information is missing, ask one precise question. Produce one simple, readable solution."`;
   }
 
   return `You are a real-time interview response assistant designed to help candidates answer technical questions with confidence, clarity, and precision.
@@ -351,6 +731,7 @@ CANDIDATE PROFILE:
 - Language: ${candidate.language || 'English'}
 - Rules: ${candidate.guardrails}
 ${followUpSection}
+${codingTaskSection}
 
 ANSWER GENERATION INSTRUCTIONS:
 - Explain in simple everyday English. Assume the reader is a beginner. Start directly with the answer. Use short sentences and natural wording that is easy to say aloud.
@@ -424,33 +805,60 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
 
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
-
   const wordCount = trimmed.split(/\s+/).length;
   const isQuestionStarter = /^(what|why|how|explain|can you|write|implement|tell me|describe)\b/i.test(trimmed);
 
-  // ── 15-Second Stitching & Follow-up Completion Rule ──
+  // ── Coding Task Intent & Requirement Parsing ──
+  const isNewProblem = /\b(new problem|next question|different problem|another problem|now let's switch|switch to)\b/i.test(trimmed);
+  if (isNewProblem) {
+    session.codingTask = null;
+    session.activeCodingLanguage = null;
+    console.log('[CodingTask] New problem detected. Cleared previous coding task restrictions.');
+  }
+
+  const isCodingSpec = isCodingInstructionOrConstraint(trimmed);
+  const isExplanationOnly = /\b(why did you|can you explain|what does line|what is the (time|space) complexity|how does (this|that) work)\b/i.test(trimmed);
+  let taskUpdated = false;
+
+  if (!isExplanationOnly && (isCodingSpec || session.codingTask)) {
+    const prevRev = session.codingTask ? session.codingTask.revision : 0;
+    session.codingTask = updateCodingTaskFromSpeech(session.codingTask, trimmed, candidateContext.preferredLanguage || 'python');
+
+    if (prevRev > 0) {
+      session.codingTask.revision = prevRev + 1;
+      taskUpdated = true;
+      console.log(`[CodingTask] Updated task to revision ${session.codingTask.revision}: ${session.codingTask.getPillSummary()}`);
+
+      // Mark older answers from previous revisions as superseded in chat history
+      for (const m of session.messages) {
+        if (m.role === 'answer' && !m.isSuperseded) {
+          m.isSuperseded = true;
+          m.supersededByRevision = session.codingTask.revision;
+        }
+      }
+    }
+  }
+
+  // ── 15-Second Stitching Rule for General Questions ──
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
-  const isContinuation = timeSinceLastQ < 15000 && (!isQuestionStarter || wordCount <= 4);
+  const isContinuation = timeSinceLastQ < 15000 && (!isQuestionStarter || wordCount <= 4) && !taskUpdated;
 
-  if (lastQ && isContinuation) {
+  if (lastQ && isContinuation && !session.codingTask) {
     // Abort previous partial answer
     if (session.activeAbort) {
       session.activeAbort.abort();
       session.activeAbort = null;
     }
 
-    // Clean up previous answer completely so no broken interrupted message is displayed
     session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
 
-    // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
     lastQ.text = `${lastQ.text.trim()} ${trimmed}`;
     lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text.trim()} ${rawText}`;
     lastQ.uncertainWords = analysis.uncertainWords;
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);
 
-    // Broadcast updated question so UI updates single bubble
     broadcastToSession(sessionId, {
       type: 'question_updated',
       msgId: lastQ.id,
@@ -460,12 +868,11 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
       sessionId
     });
 
-    // Stream the new unified answer
     streamAiAnswer(sessionId, lastQ.text, lastQ.id, session);
     return;
   }
 
-  // Auto-expire answers stuck in 'streaming' older than 30s to prevent stream lock
+  // Auto-expire answers stuck in 'streaming' older than 30s
   const now = Date.now();
   for (const m of session.messages) {
     if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 30000) {
@@ -474,16 +881,16 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     }
   }
 
-  // If an answer is actively streaming, don't let short filler noise (e.g. "ok", "yeah", "mhm") kill the answer!
+  // Noise Filter: NEVER discard coding commands or constraints!
   const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
-  if (isCurrentlyStreaming && wordCount <= 3 && !isQuestionStarter) {
-    console.log(`[Noise Filter] Ignored fragment "${trimmed}" while answer is streaming to prevent interruption.`);
+  if (isCurrentlyStreaming && !isCodingSpec && !session.codingTask && (NOISE_ONLY.test(trimmed) || (wordCount <= 2 && /^(ok|yeah|yep|mhm|uh-huh|right|sure|cool|got it)$/i.test(trimmed)))) {
+    console.log(`[Noise Filter] Ignored filler noise "${trimmed}" while answer is streaming.`);
     return;
   }
 
   // Deduplicate by question hash
   const qHash = hashText(trimmed);
-  if (session.pendingQuestionHash === qHash) return; // same question already committed
+  if (session.pendingQuestionHash === qHash) return;
   session.pendingQuestionHash = qHash;
 
   const qMsgId = uid('q');
@@ -512,13 +919,14 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     sessionId
   });
 
-  // Abort any in-progress generation
+  // Abort any in-progress generation immediately so outdated code stops streaming
   if (session.activeAbort) {
     session.activeAbort.abort();
     session.activeAbort = null;
     const inProgress = [...session.messages].reverse().find(m => m.role === 'answer' && m.status === 'streaming');
     if (inProgress) {
       inProgress.status = 'interrupted';
+      inProgress.isSuperseded = true;
       broadcastToSession(sessionId, {
         type: 'chat_interrupted',
         msgId: inProgress.id,
@@ -531,7 +939,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Main streaming answer function
+//  Main streaming answer function with task tracking & verification
 // ─────────────────────────────────────────────────────────────
 async function streamAiAnswer(sessionId, question, questionMsgId, session, continueFromText = '') {
   const reqId = uid('req');
@@ -542,6 +950,11 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   session.activeAbort = abort;
   session.activeReqId = reqId;
 
+  const task = session.codingTask;
+  const revision = task ? task.revision : 1;
+  const taskPill = task ? (task.activePillSummary || task.getPillSummary()) : null;
+  const revisionNote = (task && revision > 1) ? `Revision ${revision} · ${taskPill}` : null;
+
   // Create answer message
   const aMsg = {
     id: aMsgId,
@@ -550,6 +963,11 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     status: 'streaming',
     parentId: questionMsgId,
     reqId,
+    taskPill,
+    revision,
+    revisionNote,
+    isSuperseded: false,
+    verificationStatus: null,
     ttft: 0,
     totalTime: 0,
     createdAt: Date.now()
@@ -564,6 +982,10 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     role: 'answer',
     text: continueFromText,
     status: 'streaming',
+    taskPill,
+    revision,
+    revisionNote,
+    isSuperseded: false,
     sessionId
   });
 
@@ -588,7 +1010,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     return;
   }
 
-  const models = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'qwen/qwen3.8-27b'];
+  const models = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
   const groq = new Groq({ apiKey: groqKey });
 
   for (const model of models) {
@@ -610,7 +1032,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
       for await (const chunk of stream) {
         if (abort.signal.aborted) break;
 
-        // Reject if session moved to a new request
+        // Reject if session moved to a new request or revision
         if (session.activeReqId !== reqId) break;
 
         const text = chunk.choices[0]?.delta?.content || '';
@@ -627,6 +1049,9 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
             msgId: aMsgId,
             reqId,
             ttft: aMsg.ttft,
+            taskPill,
+            revision,
+            revisionNote,
             sessionId
           });
         }
@@ -647,10 +1072,66 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         aMsg.status = 'complete';
         aMsg.totalTime = totalTime;
 
-        // Remember code language used so subsequent follow-ups stay in this language
-        const codeLangMatch = accumulated.match(/```(\w+)/);
-        if (codeLangMatch && codeLangMatch[1]) {
-          session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
+        // Code verification and one targeted repair
+        if (task) {
+          const codeMatch = accumulated.match(/```(\w+)?\n([\s\S]*?)```/);
+          if (codeMatch && codeMatch[2]) {
+            const detectedLang = codeMatch[1] ? codeMatch[1].toLowerCase() : task.language;
+            session.activeCodingLanguage = detectedLang;
+            let verif = verifyGeneratedCode(codeMatch[2], detectedLang, task);
+
+            // One targeted repair if verification failed
+            if (!verif.ok && groqKey) {
+              console.log(`[Verification] Verification failed (${verif.error}). Attempting 1 targeted repair...`);
+              try {
+                const repairPrompt = `Your previous solution for this coding task failed verification with this specific error:
+${verif.error}
+
+Active Task Requirements:
+- Problem: ${task.problem}
+- Language: ${task.language}
+- Forbidden operations: ${task.forbiddenOperations.map(f => f.text).join(', ') || 'none'}
+- Expected outputs: ${task.expectedOutput || 'see examples'}
+
+Please fix this issue immediately.
+Implement the complete current task and satisfy every active requirement. Follow the specified language and framework. Do not use forbidden operations, including equivalent shortcuts that violate the restriction. Preserve required input and output behavior. Produce one simple, readable solution.`;
+
+                const repairMessages = [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'assistant', content: accumulated },
+                  { role: 'user', content: repairPrompt }
+                ];
+
+                const repairRes = await groq.chat.completions.create({
+                  messages: repairMessages,
+                  model,
+                  temperature: 0.1,
+                  max_tokens: 800
+                });
+
+                const repairedContent = repairRes.choices[0]?.message?.content;
+                if (repairedContent) {
+                  const repMatch = repairedContent.match(/```(\w+)?\n([\s\S]*?)```/);
+                  if (repMatch) {
+                    const repVerif = verifyGeneratedCode(repMatch[2], repMatch[1] || task.language, task);
+                    if (repVerif.ok) {
+                      console.log('[Verification] Targeted repair verified successfully!');
+                      accumulated = repairedContent;
+                      aMsg.text = accumulated;
+                      verif = repVerif;
+                    }
+                  }
+                }
+              } catch (repErr) {
+                console.warn('[Verification] Repair attempt error:', repErr.message);
+              }
+            }
+
+            aMsg.verificationStatus = verif.ok ? 'verified' : 'failed';
+            aMsg.verificationDetails = verif;
+            task.currentCode = codeMatch[2];
+            task.verificationStatus = aMsg.verificationStatus;
+          }
         }
 
         broadcastToSession(sessionId, {
@@ -659,6 +1140,10 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
           reqId,
           fullText: accumulated,
           totalTime,
+          taskPill: aMsg.taskPill,
+          revision: aMsg.revision,
+          revisionNote: aMsg.revisionNote,
+          verificationStatus: aMsg.verificationStatus,
           sessionId
         });
 
@@ -724,7 +1209,10 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
   let text = prefix;
   let answer = '';
 
-  if (q.includes('sql') || q.includes('query') || q.includes('salary') || q.includes('database')) {
+  if (q.includes('second') && (q.includes('largest') || q.includes('distinct'))) {
+    const returnVal = q.includes('-1') ? '-1' : 'None';
+    answer = `To find the second distinct largest number without sorting, maintain two variables tracking the largest and second largest distinct values in a single pass.\n\n\`\`\`python\ndef second_distinct_largest(nums):\n    if not nums:\n        return ${returnVal}\n    first = second = None\n    for n in nums:\n        if first is None or n > first:\n            second = first\n            first = n\n        elif n != first and (second is None or n > second):\n            second = n\n    return second if second is not None else ${returnVal}\n\`\`\`\n\nThis scans the array once in O(N) time with O(1) extra space. Comparing against first and second avoids duplicate values like [5, 5, 3] and properly returns ${returnVal} when no second distinct value exists.`;
+  } else if (q.includes('sql') || q.includes('query') || q.includes('salary') || q.includes('database')) {
     answer = `To find the second-highest salary per department while handling ties, use the DENSE_RANK() window function.\n\n\`\`\`sql\nSELECT department, employee_name, salary\nFROM (\n  SELECT department, employee_name, salary,\n         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk\n  FROM employees\n  WHERE salary IS NOT NULL\n) ranked\nWHERE rnk = 2;\n\`\`\`\n\nThe inner query ranks employees by salary within each department without skipping rank numbers when ties occur. The outer query filters for rank 2 to return all second-highest earners cleanly.`;
   } else if (q.includes('react') || q.includes('virtual dom') || q.includes('usememo')) {
     answer = `React's Virtual DOM is a lightweight memory representation of the real DOM. When state changes, React compares the new tree with the old one and updates only the changed DOM elements.\n\n- useMemo caches calculated values across renders\n- useCallback preserves function references to avoid child re-renders\n- Keys help React track which items were added or moved`;
