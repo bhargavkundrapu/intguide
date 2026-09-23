@@ -162,28 +162,13 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
 
   // Answer message
   return (
-    <div className={`chat-msg chat-msg-answer ${msg.isSuperseded ? 'chat-msg-superseded' : ''}`}>
+    <div className="chat-msg chat-msg-answer">
       <div className="chat-msg-header">
         <div className="chat-role-label">
           <Sparkles size={12} />
           AI Copilot
-          {msg.revision > 1 && !msg.isSuperseded && (
-            <span className="badge badge-purple" style={{ fontSize: 9, padding: '1px 5px', marginLeft: 4 }}>
-              v{msg.revision}
-            </span>
-          )}
-          {msg.isSuperseded && (
-            <span className="badge badge-amber" style={{ fontSize: 9, padding: '1px 5px', marginLeft: 4 }}>
-              v{msg.revision || 1} (superseded)
-            </span>
-          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {msg.verificationStatus === 'verified' && (
-            <span className="badge badge-green" style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <CheckCircle size={10} /> Verified
-            </span>
-          )}
           <StatusBadge status={msg.status} />
           {msg.ttft > 0 && (
             <span className="ttft-chip" style={{ fontSize: 10 }}>
@@ -199,33 +184,6 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
       </div>
 
       <div className="chat-bubble-answer">
-        {/* Active Coding Task Pill Summary */}
-        {msg.taskPill && (
-          <div className="task-pill" style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '3px 10px',
-            marginBottom: 8,
-            borderRadius: 6,
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--blue-700, #1d4ed8)',
-            background: 'var(--blue-50, #eff6ff)',
-            border: '1px solid var(--blue-200, #bfdbfe)',
-            fontFamily: 'JetBrains Mono, monospace'
-          }}>
-            <span>⚡ {msg.taskPill}</span>
-          </div>
-        )}
-
-        {/* Revision Note */}
-        {msg.revisionNote && (
-          <div style={{ fontSize: 11, color: 'var(--gray-500)', marginBottom: 8, fontStyle: 'italic' }}>
-            {msg.revisionNote}
-          </div>
-        )}
-
         {msg.status === 'streaming' && !msg.text && (
           <div className="answer-generating" style={{ margin: 0 }}>
             <div className="spinner" />
