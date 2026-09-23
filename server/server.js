@@ -9,6 +9,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const Groq = require('groq-sdk');
 
+dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
 
 const app = express();
@@ -34,7 +35,8 @@ const candidateContext = {
   jobDescription: "Build low-latency real-time applications, large-scale data pipelines with PySpark and Databricks, scale Node.js services, design clean UIs, work with LLM APIs.",
   projects: "1. Real-time Audio Analytics Platform: WebSockets, Node.js pipelines, React dashboard.\n2. Data Lakehouse Architecture: PySpark, Delta Lake, Databricks, Redshift, Athena for 10TB+ daily telemetry.",
   guardrails: "Use only verified candidate facts. For missing experience, give industry best-practice answer and note candidate familiarity. Never invent metrics, employers, or results.",
-  language: "English"
+  language: "English",
+  preferredLanguage: "Python"
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -126,6 +128,7 @@ function getOrCreateSession(sessionId) {
       seenTranscriptHashes: new Set(),
       pendingQuestionHash: null,
       initialWebmHeader: null,
+      activeCodingLanguage: null,
     });
   }
   return sessions.get(sessionId);
@@ -257,99 +260,135 @@ class TranscriptAccumulator {
 }
 
 // ─────────────────────────────────────────────────────────────
-//  Context builder — relevant history only, not full transcript
+//  Context builder — multi-turn conversation history & language continuity
 // ─────────────────────────────────────────────────────────────
 function buildContext(session, currentQuestion) {
-  const messages = session.messages;
-  const recent = messages.slice(-6); // last 3 Q+A pairs max
+  const messages = session.messages || [];
 
-  // Detect follow-up by checking latest question for referential phrases
-  const followUpPatterns = [
-    /^(why|how|give (me )?an example|what about|can you (optimize|improve)|explain (the )?(second|first|third|that)|use \w+ instead|what happens|how is that different)/i,
-    /^(and|but|also|additionally|what if|now|so|that|this|those|these)\b/i,
-  ];
-  const isFollowUp = followUpPatterns.some(p => p.test(currentQuestion.trim()));
+  // Collect previous completed exchanges (up to 4 most recent Q&A pairs)
+  // excluding the current question which was just added
+  const completedPairs = [];
+  const completedQuestions = messages.filter(m => m.role === 'question' && m.status === 'complete');
+  const previousQuestions = completedQuestions.filter(q => q.text.trim().toLowerCase() !== currentQuestion.trim().toLowerCase());
+  const recentQuestions = previousQuestions.slice(-4);
 
-  // Find parent question/answer for context
-  let parentQuestion = null;
-  let parentAnswer = null;
-  if (isFollowUp && messages.length >= 2) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'answer' && messages[i].status === 'complete') {
-        parentAnswer = messages[i];
-        // Find the question for this answer
-        const qMsg = messages.find(m => m.id === messages[i].parentId);
-        if (qMsg) parentQuestion = qMsg;
+  for (const q of recentQuestions) {
+    const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && m.status === 'complete' && m.text.trim());
+    if (a) {
+      completedPairs.push({
+        question: q.text.trim(),
+        answer: a.text.trim()
+      });
+    }
+  }
+
+  // Detect or update active coding language from recent answers if not explicitly set
+  if (!session.activeCodingLanguage && completedPairs.length > 0) {
+    for (let i = completedPairs.length - 1; i >= 0; i--) {
+      const codeMatch = completedPairs[i].answer.match(/```(\w+)/);
+      if (codeMatch && codeMatch[1]) {
+        session.activeCodingLanguage = codeMatch[1].toLowerCase();
         break;
       }
     }
   }
 
+  // Build multi-turn chat messages for LLM context
+  const conversationHistory = [];
+  for (const item of completedPairs) {
+    conversationHistory.push({
+      role: 'user',
+      content: `INTERVIEW QUESTION: "${item.question}"`
+    });
+    // Bounded answer to keep prompt clean while preserving code and key logic
+    const boundedAnswer = item.answer.length > 1200
+      ? item.answer.slice(0, 1200) + '\n...(truncated for length)'
+      : item.answer;
+    conversationHistory.push({
+      role: 'assistant',
+      content: boundedAnswer
+    });
+  }
+
+  const lastPair = completedPairs[completedPairs.length - 1] || null;
+
   return {
     currentQuestion,
-    isFollowUp,
-    parentQuestion: parentQuestion?.text || null,
-    parentAnswer: parentAnswer?.text || null,
-    recentHistory: recent.map(m => ({ role: m.role, text: m.text.slice(0, 600), status: m.status })),
+    isFollowUp: completedPairs.length > 0,
+    parentQuestion: lastPair?.question || null,
+    parentAnswer: lastPair?.answer || null,
+    conversationHistory,
+    activeCodingLanguage: session.activeCodingLanguage || null,
     candidate: candidateContext,
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-//  System prompt — simple, short, natural answers & clean code
+//  System prompt — continuity, language consistency, simple answers & clean code
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, parentQuestion, parentAnswer, isFollowUp } = ctx;
+  const { candidate, parentQuestion, parentAnswer, activeCodingLanguage } = ctx;
+  const defaultLang = candidate.preferredLanguage || 'Python';
+  const effectiveLang = activeCodingLanguage || defaultLang;
 
   let followUpSection = '';
-  if (isFollowUp && parentQuestion) {
+  if (parentQuestion) {
     followUpSection = `
-PREVIOUS QUESTION: ${parentQuestion}
-PREVIOUS ANSWER SUMMARY: ${parentAnswer ? parentAnswer.slice(0, 500) : '(still generating)'}
-This is a follow-up. Answer the new point directly using the earlier conversation.`;
+RECENT CONVERSATION CONTEXT:
+* Previous Question: "${parentQuestion}"
+* Previous Answer Summary: ${parentAnswer ? parentAnswer.slice(0, 600) : '(none)'}
+* This interview is an ongoing conversation. When the current question asks for optimization, edge cases, explanation, variations, or refers to "it", "that", "the function", or "the query", DIRECTLY build upon the previous solution above.`;
   }
 
-  return `You are a real-time interview response assistant designed to help candidates answer with confidence and clarity.
-
-Answer the latest complete interviewer question using the provided conversation context.
+  return `You are a real-time interview response assistant designed to help candidates answer technical questions with confidence, clarity, and precision.
 
 CANDIDATE PROFILE:
 - Target Role: ${candidate.targetRole}
 - Résumé: ${candidate.resume}
 - Projects: ${candidate.projects}
 - Job Description: ${candidate.jobDescription}
+- Preferred Coding Language: ${defaultLang}
+- Language: ${candidate.language || 'English'}
 - Rules: ${candidate.guardrails}
-- Language preference: ${candidate.language || 'English'}
 ${followUpSection}
 
 ANSWER GENERATION INSTRUCTIONS:
-Explain in simple everyday English. Assume the reader is a beginner. Start directly with the answer. Use short sentences and natural wording that is easy to say aloud.
+- Explain in simple everyday English. Assume the reader is a beginner. Start directly with the answer. Use short sentences and natural wording that is easy to say aloud.
+- For a normal question, aim for 2–4 short sentences. Use a few brief bullets only when listing steps or comparing points.
+- Answer every part of a multi-part question. Add length only when needed to cover the question accurately.
+- Use necessary technical terms, but explain unfamiliar terms briefly. Avoid complicated wording, lengthy introductions, repetition, filler, and unrelated details. Never start with "Certainly!", "Great question!", or "Here is the answer."
+- For follow-up questions, use the earlier conversation and answer the new point directly.
+- Treat these as writing guidelines, not hard limits that cut off an incomplete answer.
 
-For a normal question, aim for 2–4 short sentences. Use a few brief bullets only when listing steps or comparing points.
+CONVERSATION CONTINUITY & FOLLOW-UPS:
+- You have the recent conversation history between the interviewer and candidate.
+- Maintain continuous context across questions. When the interviewer says "can you optimize that?", "what if there are duplicates?", "rewrite it", "how will this scale?", "write tests for it", or refers to earlier code with "it" or "this", reference and build upon what was already discussed.
+- Never ask the interviewer to repeat or re-state what they are referring to.
+- If asked to modify or optimize a solution, build directly on the specific logic and variable names already established.
 
-Answer every part of a multi-part question. Add length only when needed to cover the question accurately.
-
-Use necessary technical terms, but explain unfamiliar terms briefly. Avoid complicated wording, lengthy introductions, repetition, filler, and unrelated details. Never start with "Certainly!", "Great question!", or "Here is the answer."
-
-For follow-up questions, use the earlier conversation and answer the new point directly.
-
-Treat these as writing guidelines, not hard limits that cut off an incomplete answer.
+CODING LANGUAGE CONSISTENCY & RULES:
+- Primary default language: ${defaultLang}
+- Current active interview language: ${effectiveLang}
+- Follow this strict hierarchy to select the programming language for any code block:
+  1. EXPLICIT INTERVIEWER REQUEST: If the interviewer asks for a specific language or technology (e.g. "in SQL", "in Python", "using PySpark", "in TypeScript", "in Java", "in C++"), ALWAYS use that requested language.
+  2. FOLLOW-UP CONTINUITY: When modifying, optimizing, explaining, or writing tests for previous code, ALWAYS stay in the SAME language (${effectiveLang}) unless the interviewer explicitly asked to switch or translate.
+  3. DOMAIN DEFAULTS (when no language is mentioned):
+     * Relational DB queries, aggregations, window functions, schema/table transformations: SQL (PostgreSQL standard).
+     * Big data pipelines, distributed dataframes, Databricks ETL: PySpark.
+     * Algorithms, data structures, backend functions, math, scripting: ${defaultLang}.
+     * Web frontend, UI components, React: JavaScript or TypeScript.
+  4. NO RANDOM LANGUAGE SWITCHING: Never switch between Java, C++, Python, JavaScript, etc., from one question to the next. Consistency across the interview is strictly required.
 
 CODING GUIDELINES:
-Prefer one straightforward, correct solution in the language or framework requested.
-
-Use readable variable names, necessary imports, and a small number of clear steps. Avoid unnecessary classes, helper layers, repeated setup, excessive comments, and clever one-liners that are hard to explain.
-
-Keep lines reasonably short by using valid source-code line breaks. Do not alter identifiers, string contents, or logic just to shorten a line.
-
-For coding answers, normally provide:
-* One short sentence explaining the approach.
-* One complete code block for the requested task.
-* Two short sentences explaining the important steps.
-
-Do not omit required logic, use placeholder ellipses, or sacrifice correctness to reduce code length. Do not append edge-case or complexity sections unless asked.
-
-Do NOT automatically generate "Edge Cases," "Time Complexity," or "Space Complexity" sections. If the interviewer specifically asks about one of these topics, answer that question briefly in normal language without adding unnecessary sections.`;
+- Provide one straightforward, correct solution adhering to the language rules above.
+- Always include the language identifier in the code fence (e.g. \`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql).
+- Use readable variable names, necessary imports, and a small number of clear steps. Avoid unnecessary classes, helper layers, repeated setup, excessive comments, and clever one-liners that are hard to explain.
+- Keep lines reasonably short by using valid source-code line breaks. Do not alter identifiers, string contents, or logic just to shorten a line.
+- For coding answers, normally provide:
+  * One short sentence explaining the approach.
+  * One complete code block for the requested task.
+  * Two short sentences explaining the important steps.
+- Do NOT automatically generate "Edge Cases," "Time Complexity," or "Space Complexity" sections. If the interviewer specifically asks about one of these topics, answer that question briefly in normal language without adding unnecessary sections.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -533,9 +572,14 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
 
   const userContent = continueFromText
     ? `Continue from where you stopped. Do NOT repeat what was already said.\n\nPrevious partial answer:\n${continueFromText}\n\nOriginal question: "${question}"`
-    : (ctx.isFollowUp && ctx.parentQuestion
-      ? `FOLLOW-UP QUESTION: "${question}"\n\nRecent conversation:\n${ctx.recentHistory.map(m => `[${m.role}] ${m.text}`).join('\n')}`
-      : `INTERVIEW QUESTION: "${question}"`);
+    : `INTERVIEW QUESTION: "${question}"`;
+
+  // True multi-turn conversation messages: System Prompt + Recent Conversation Exchanges + Current Question
+  const chatMessages = [
+    { role: 'system', content: systemPrompt },
+    ...(ctx.conversationHistory || []),
+    { role: 'user', content: userContent }
+  ];
 
   const groqKey = process.env.GROQ_API_KEY;
 
@@ -552,10 +596,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
 
     try {
       const stream = await groq.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent }
-        ],
+        messages: chatMessages,
         model,
         temperature: 0.25,
         max_tokens: 800,
@@ -605,6 +646,12 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         const totalTime = Date.now() - startTime;
         aMsg.status = 'complete';
         aMsg.totalTime = totalTime;
+
+        // Remember code language used so subsequent follow-ups stay in this language
+        const codeLangMatch = accumulated.match(/```(\w+)/);
+        if (codeLangMatch && codeLangMatch[1]) {
+          session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
+        }
 
         broadcastToSession(sessionId, {
           type: 'chat_done',
@@ -752,7 +799,7 @@ app.get('/api/info', (req, res) => {
 
 app.get('/api/context', (req, res) => res.json(candidateContext));
 app.post('/api/context', (req, res) => {
-  const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language'];
+  const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language', 'preferredLanguage'];
   fields.forEach(f => { if (req.body[f] !== undefined) candidateContext[f] = req.body[f]; });
   res.json({ success: true, context: candidateContext });
 });
@@ -1115,6 +1162,21 @@ wss.on('connection', (ws) => {
 
         case 'clear_answer': {
           broadcastToSession(currentSessionId, { type: 'ai_clear' });
+          break;
+        }
+
+        case 'clear_history': {
+          const session = sessions.get(currentSessionId);
+          if (session) {
+            session.messages = [];
+            session.pendingQuestionHash = null;
+            session.activeCodingLanguage = null;
+            session.seenTranscriptHashes.clear();
+            session.transcriptAccumulator.committed = '';
+            session.transcriptAccumulator.interim = '';
+            session.transcriptAccumulator._clearSettle();
+          }
+          broadcastToSession(currentSessionId, { type: 'history_cleared' });
           break;
         }
 

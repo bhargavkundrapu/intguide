@@ -7,7 +7,8 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
     targetRole: '',
     jobDescription: '',
     projects: '',
-    guardrails: ''
+    guardrails: '',
+    preferredLanguage: 'Python'
   });
   const [vocabulary, setVocabulary] = useState([]);
   const [newTerm, setNewTerm] = useState('');
@@ -87,6 +88,25 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
               value={form.targetRole}
               onChange={e => setForm(p => ({ ...p, targetRole: e.target.value }))}
             />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Preferred Coding Language</label>
+            <select
+              className="form-input"
+              value={form.preferredLanguage || 'Python'}
+              onChange={e => setForm(p => ({ ...p, preferredLanguage: e.target.value }))}
+            >
+              <option value="Python">Python (Default for Algorithms & General Coding)</option>
+              <option value="SQL">SQL (Databases & Relational Queries)</option>
+              <option value="PySpark">PySpark (Data Pipelines & Dataframes)</option>
+              <option value="JavaScript / TypeScript">JavaScript / TypeScript (Full Stack & Web)</option>
+              <option value="Java">Java</option>
+              <option value="C++">C++</option>
+            </select>
+            <span style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 2 }}>
+              Used consistently when the interviewer doesn't specify a language or asks follow-ups.
+            </span>
           </div>
 
           <div className="form-group">
