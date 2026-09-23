@@ -13,8 +13,13 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
   const canvasRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const speechRecognitionRef = useRef(null);
+  const isListeningRef = useRef(isListening);
 
-  // Web Speech API fallback
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
+
+  // Web Speech API fallback with continuous auto-restart
   useEffect(() => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SR) {
@@ -32,6 +37,19 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
         if (onTranscriptUpdate) {
           if (final) onTranscriptUpdate(final, true);
           else if (interim) onTranscriptUpdate(interim, false);
+        }
+      };
+      recognition.onend = () => {
+        // Auto-restart if still listening so speech recognition never dies mid-interview
+        if (isListeningRef.current) {
+          try {
+            recognition.start();
+          } catch (e) {}
+        }
+      };
+      recognition.onerror = (e) => {
+        if (e.error === 'no-speech' && isListeningRef.current) {
+          // Expected when there's silence; onend will restart it
         }
       };
       speechRecognitionRef.current = recognition;

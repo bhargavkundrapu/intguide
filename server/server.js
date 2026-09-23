@@ -125,6 +125,7 @@ function getOrCreateSession(sessionId) {
       transcriptAccumulator: new TranscriptAccumulator(sessionId),
       seenTranscriptHashes: new Set(),
       pendingQuestionHash: null,
+      initialWebmHeader: null,
     });
   }
   return sessions.get(sessionId);
@@ -423,6 +424,15 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     // Stream the new unified answer
     streamAiAnswer(sessionId, lastQ.text, lastQ.id, session);
     return;
+  }
+
+  // Auto-expire answers stuck in 'streaming' older than 30s to prevent stream lock
+  const now = Date.now();
+  for (const m of session.messages) {
+    if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 30000) {
+      m.status = 'complete';
+      console.log(`[Server] Auto-expired stale streaming answer ${m.id}`);
+    }
   }
 
   // If an answer is actively streaming, don't let short filler noise (e.g. "ok", "yeah", "mhm") kill the answer!
@@ -862,6 +872,18 @@ wss.on('connection', (ws) => {
       deepgramWs.on('open', () => {
         ws.send(JSON.stringify({ type: 'deepgram_status', status: 'connected' }));
 
+        const session = sessions.get(sessionId);
+        // If we have a cached WebM header from the first chunk, send it immediately
+        // so Deepgram can decode the Opus audio stream across any reconnect!
+        if (session?.initialWebmHeader) {
+          try {
+            deepgramWs.send(session.initialWebmHeader);
+            console.log(`[Deepgram] Re-injected initial WebM header (${session.initialWebmHeader.length} bytes) on connect/reconnect.`);
+          } catch (e) {
+            console.error('[Deepgram] Failed to re-inject WebM header:', e.message);
+          }
+        }
+
         // Flush any audio chunks queued while connecting
         while (audioChunkQueue.length > 0) {
           try {
@@ -949,7 +971,13 @@ wss.on('connection', (ws) => {
   ws.on('message', async (message, isBinary) => {
     // Binary = audio chunk from MediaRecorder (laptop tab/mic or mobile mic)
     if (isBinary) {
-      const dgSocket = ensureDeepgramSocket(currentSessionId || 'SESSION-1');
+      const activeSessionId = currentSessionId || 'SESSION-1';
+      const session = getOrCreateSession(activeSessionId);
+      if (!session.initialWebmHeader && message.length > 0) {
+        session.initialWebmHeader = Buffer.from(message);
+        console.log(`[Audio] Cached initial WebM header chunk (${message.length} bytes) for session ${activeSessionId}`);
+      }
+      const dgSocket = ensureDeepgramSocket(activeSessionId);
       if (dgSocket?.readyState === WebSocket.OPEN) {
         while (audioChunkQueue.length > 0) {
           try { dgSocket.send(audioChunkQueue.shift()); } catch (e) {}

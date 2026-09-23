@@ -1,8 +1,65 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Copy, Check } from 'lucide-react';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-sql';
+import 'prismjs/components/prism-javascript';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-bash';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-java';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+
+function highlightCode(code, lang) {
+  if (!code) return '';
+  const normalized = (lang || '').toLowerCase().trim();
+  const aliasMap = {
+    py: 'python',
+    python: 'python',
+    pyspark: 'python',
+    sql: 'sql',
+    pgsql: 'sql',
+    mysql: 'sql',
+    js: 'javascript',
+    javascript: 'javascript',
+    jsx: 'javascript',
+    ts: 'typescript',
+    typescript: 'typescript',
+    tsx: 'typescript',
+    sh: 'bash',
+    bash: 'bash',
+    shell: 'bash',
+    zsh: 'bash',
+    json: 'json',
+    java: 'java',
+    c: 'c',
+    cpp: 'cpp',
+    'c++': 'cpp'
+  };
+
+  const targetLang = aliasMap[normalized] || (Prism.languages[normalized] ? normalized : null);
+
+  if (targetLang && Prism.languages[targetLang]) {
+    try {
+      return Prism.highlight(code, Prism.languages[targetLang], targetLang);
+    } catch (err) {
+      // fallback to safe html escape
+    }
+  }
+
+  // Fallback safe HTML escaping
+  return code
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
 
 function CodeBlockItem({ lang, code }) {
   const [copied, setCopied] = useState(false);
+  const highlightedHtml = useMemo(() => highlightCode(code, lang), [code, lang]);
 
   const fallbackCopy = (text) => {
     try {
@@ -44,7 +101,10 @@ function CodeBlockItem({ lang, code }) {
         </button>
       </div>
       <pre className="code-block">
-        <code>{code}</code>
+        <code
+          className={`language-${lang || 'none'}`}
+          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+        />
       </pre>
     </div>
   );
