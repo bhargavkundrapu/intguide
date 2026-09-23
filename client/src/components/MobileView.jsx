@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff, Edit2, AlertTriangle } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
