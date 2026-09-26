@@ -238,15 +238,15 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
-    this.SETTLE_MS = 950;     // fast settle after 950ms of quiet
-    this.WINDOW_MS = 8000;    // 8-second question accumulation window max
+    this.SETTLE_MS = 1400;    // settle after 1.4s of quiet (natural conversational pause)
+    this.WINDOW_MS = 10000;   // 10-second question accumulation window max
   }
 
   _getDynamicSettleMs() {
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
-    // If an answer is currently streaming, allow 1400ms of quiet before settling to protect the active answer
-    return isStreaming ? 1400 : this.SETTLE_MS;
+    // While an answer is actively streaming, allow 2000ms of quiet before settling to protect the active answer
+    return isStreaming ? 2000 : this.SETTLE_MS;
   }
 
   isIncomplete(text) {
@@ -538,18 +538,52 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const rawText = rawTranscript || trimmed;
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
   const wordCount = trimmed.split(/\s+/).length;
+  const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
 
-  // ── Stitching Rule (ONLY for genuine incomplete questions or explicit qualifiers within 6s) ──
+  // Shield active answer from premature interruptions:
+  // If an answer is currently streaming, discard filler / casual remarks completely!
+  if (isCurrentlyStreaming && !isManual) {
+    const isFiller = /^(ok|okay|yeah|yes|no|got it|sure|alright|thanks|thank you|cool|great|understood|makes sense|i see|right|mhm|uh|um|hmm|perfect|nice|fine|yep|yup)\b/i.test(trimmed);
+    if (isFiller) {
+      console.log(`[Streaming Shield] Discarded filler "${trimmed}" during streaming.`);
+      return;
+    }
+
+    const isExplicitQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
+    const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
+
+    // If it lacks clear question intent or is under 5 words without technical terms, ignore it to protect the streaming answer!
+    if (!isExplicitQuestion && !hasTechTopic) {
+      console.log(`[Streaming Shield] Ignored speech "${trimmed}" while answer is streaming to protect active generation.`);
+      return;
+    }
+  }
+
+  // ── Smart Stitching Rule ──
+  // If a question was committed recently (< 7000ms ago):
+  // Check if incoming text is a continuation or qualifier of that question.
+  // When stitched, previous partial answer is cleanly replaced with NO "interrupted" badge!
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
 
   const lastWasIncomplete = lastQ && INCOMPLETE_TRAILING.test(lastQ.text.trim());
   const isExplicitContinuation = /^(without using|using|in python|in sql|in typescript|in java|and how many|and also|with time complexity|with o\()/i.test(trimmed);
+  const isConjunctionStart = /^(and|or|also|with|without|using|in|for|plus|where|along with|specifically|especially)\b/i.test(trimmed);
+  const isExplicitNewQuestion = /^(what|how|why|where|when|who|which|can you|could you|explain|implement|write|is there|are there|does this|will this)\b/i.test(trimmed);
 
-  const isContinuation = timeSinceLastQ < 6000 && (lastWasIncomplete || isExplicitContinuation);
+  const isContinuation = Boolean(
+    lastQ &&
+    timeSinceLastQ < 7000 &&
+    (
+      lastWasIncomplete ||
+      isExplicitContinuation ||
+      isConjunctionStart ||
+      (!isExplicitNewQuestion && (isCurrentlyStreaming || wordCount < 8))
+    )
+  );
 
   if (lastQ && isContinuation) {
-    // Abort previous partial answer
+    // Abort previous partial answer cleanly
     if (session.activeAbort) {
       session.activeAbort.abort();
       session.activeAbort = null;
@@ -561,7 +595,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
     lastQ.text = `${lastQ.text.trim()} ${trimmed}`;
     lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text.trim()} ${rawText}`;
-    lastQ.uncertainWords = analysis.uncertainWords;
+    lastQ.uncertainWords = [...(lastQ.uncertainWords || []), ...analysis.uncertainWords];
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);
 
@@ -586,20 +620,6 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 30000) {
       m.status = 'complete';
       console.log(`[Server] Auto-expired stale streaming answer ${m.id}`);
-    }
-  }
-
-  // Shield active answer from premature interruptions:
-  // If an answer is currently streaming, don't let casual remarks or small chatter kill it!
-  const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
-  if (isCurrentlyStreaming && !isManual) {
-    const isExplicitQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
-    const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
-
-    // If it lacks clear question intent or is under 5 words without technical terms, ignore it to protect the streaming answer!
-    if (!isExplicitQuestion && !hasTechTopic) {
-      console.log(`[Streaming Shield] Ignored speech "${trimmed}" while answer is streaming to protect active generation.`);
-      return;
     }
   }
 
