@@ -166,10 +166,12 @@ function getOrCreateSession(sessionId) {
       activeReqId: null,
       activeAbort: null,
       transcriptAccumulator: new TranscriptAccumulator(sessionId),
-      seenTranscriptHashes: new Set(),
       pendingQuestionHash: null,
       initialWebmHeader: null,
       activeCodingLanguage: null,
+      deepgramActive: false,
+      lastDeepgramTimestamp: 0,
+      lastFinalTranscript: null,
     });
   }
   return sessions.get(sessionId);
@@ -185,11 +187,45 @@ const CHATTER_REGEX = /\b(thank you|thanks a lot|thanks|bye|goodbye|i'm not well
 
 const PURE_NOISE_OR_FILLER = /^(uh+|um+|hmm+|mm+|okay+|yes+|no+|right|sure|alright|okay then|mhm+|yeah+|nope+|yep+|cool|nice|fine|sorry|hello|hi|bye|thanks|thank you|good|understood|heading)[\s.,!?]*$/i;
 
-const QUESTION_INTENT_REGEX = /(^|\b)(what|why|how|where|when|which|who|whose|whom|can you|could you|would you|will you|should we|shall we|do you|did you|have you|are you|is it|is there|are there|does it|does this|will this|write|implement|explain|describe|compare|differentiate|discuss|optimize|solve|calculate|design|create|build|walk me through|show me|give me|rewrite|find|fix|debug|refactor)\b/i;
+const QUESTION_INTENT_REGEX = /(^|\b)(what|why|how|where|when|which|who|whose|whom|can you|could you|would you|will you|should we|shall we|do you|did you|have you|are you|is it|is there|are there|does it|does this|will this|tell me|talk about|write|implement|explain|describe|compare|differentiate|discuss|optimize|solve|calculate|design|create|build|walk me through|show me|give me|rewrite|find|fix|debug|refactor)\b/i;
 
-const TECH_TOPIC_REGEX = /\b(sql|query|database|table|index|join|spark|pyspark|databricks|delta lake|dataframe|react|redux|node|javascript|typescript|python|algorithm|complexity|array|list|hashmap|tree|graph|binary search|duplicate|duplicates|palindrome|reverse|recursion|memo|decorator|promise|async|await|event loop|microtask|closure|docker|kubernetes|aws|azure|kafka|rest api|graphql|dense_rank|partition)\b/i;
+const TECH_TOPIC_REGEX = /\b(sql|query|database|table|index|join|spark|pyspark|databricks|delta lake|dataframe|react|redux|node|javascript|typescript|python|algorithm|complexity|array|list|hashmap|tree|graph|binary search|duplicate|duplicates|palindrome|reverse|recursion|memo|decorator|promise|async|await|event loop|microtask|closure|docker|kubernetes|aws|azure|kafka|rest api|graphql|dense_rank|partition|caching|redis|memcached|mongodb|postgres|postgresql|mysql|nosql|dynamodb|acid|transaction|transactions|deadlock|concurrency|multithreading|thread|threads|mutex|semaphore|queue|stack|heap|priority queue|trie|dynamic programming|sliding window|two pointers|dfs|bfs|big o|memory leak|garbage collection|gc|microservice|microservices|load balancer|reverse proxy|nginx|cdn|dns|oauth|jwt|auth|cors|websocket|websockets)\b/i;
 
-const INCOMPLETE_TRAILING = /(?:for|to|in|with|using|without|and|or|by|from|of|about|that|like|a|an)\s*$/i;
+// Problem setup / context opener detection
+const SETUP_PREMISE_REGEX = /^(suppose|assume|given|consider|imagine|let\'s say|say we have|in a scenario|in a case|in our system|we have a|there is a|there are|our team has|we need to|in this problem|in your project)\b/i;
+
+// Action or direct interrogative indicators inside question
+const DIRECT_QUESTION_ACTION_REGEX = /\b(how (do|would|can|should|will|to)|what (is|are|would|happens|should)|why (is|do|would)|can you|could you|would you|write a|implement a|create a|design a|optimize|calculate)\b/i;
+
+function isPremiseOnly(text) {
+  const t = (text || '').trim();
+  if (!t) return false;
+  const startsWithSetup = SETUP_PREMISE_REGEX.test(t);
+  const hasQuestionMark = t.endsWith('?') || t.includes('?');
+  const hasDirectAction = DIRECT_QUESTION_ACTION_REGEX.test(t);
+  return startsWithSetup && !hasQuestionMark && !hasDirectAction;
+}
+
+// Incomplete trailing phrases or unfinished thoughts
+const INCOMPLETE_TRAILING = /\b(?:for|to|in|into|with|without|using|and|or|by|from|of|about|that|like|as|a|an|the|this|these|those|is|are|was|were|be|been|have|has|had|do|does|did|can|could|will|would|should|may|might|which|who|where|when|why|how|if|whether|because|since|while|so|but|such as|for example|between|either|neither|both|than|including)\s*$/i;
+
+const INCOMPLETE_PHRASES = /(?:write a|how to|how do|how would|how can|what is|what are|what does|why does|can you|could you|would you|is it|does it|will it|to find|to get|to check|to implement|to calculate|to optimize|in terms of|with respect to|based on|depending on)\s*$/i;
+
+function isIncomplete(text) {
+  const t = (text || '').trim();
+  if (!t) return true;
+  return INCOMPLETE_TRAILING.test(t) || INCOMPLETE_PHRASES.test(t);
+}
+
+function isCompleteDirectQuestion(text) {
+  const t = (text || '').trim();
+  if (!t) return false;
+  if (isIncomplete(t)) return false;
+  if (isPremiseOnly(t)) return false;
+  if (t.endsWith('?') && t.split(/\s+/).length >= 4) return true;
+  if (QUESTION_INTENT_REGEX.test(t) && t.split(/\s+/).length >= 5) return true;
+  return false;
+}
 
 function isPureChatterOrNoise(text) {
   const trimmed = (text || '').trim();
@@ -198,15 +234,15 @@ function isPureChatterOrNoise(text) {
 
   const hasQuestionIntent = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
   const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
+  const hasSetup = SETUP_PREMISE_REGEX.test(trimmed);
 
-  // If the speech has NO question intent AND NO technical topic, it is not an interview question!
-  // This cleanly filters out background phone conversations, stray chatter, and room noise.
-  if (!hasQuestionIntent && !hasTechTopic) {
+  // If the speech has NO question intent, NO technical topic, and is NOT a problem premise, filter it out
+  if (!hasQuestionIntent && !hasTechTopic && !hasSetup) {
     return true;
   }
 
-  // If short and contains conversational chatter phrases
-  if (CHATTER_REGEX.test(trimmed) && !hasTechTopic && !trimmed.endsWith('?')) {
+  // If short and contains conversational chatter phrases without question mark or tech topic
+  if (CHATTER_REGEX.test(trimmed) && !hasTechTopic && !hasQuestionIntent && !trimmed.endsWith('?')) {
     return true;
   }
 
@@ -217,17 +253,19 @@ function sanitizeQuestionText(text) {
   let cleaned = (text || '').trim();
   if (!cleaned) return '';
 
-  // Strip trailing polite / phone chatter from real questions
-  // e.g., "Write a python program to find duplicate values... Thank you. In two Rev, Heading" -> "Write a python program to find duplicate values..."
-  const trailingChatterMatch = cleaned.match(/^(.*?[.?])\s+(?:thank you|thanks|bye|goodbye|i'm calling|her phone|i don't know|in two rev|heading).*$/i);
-  if (trailingChatterMatch && trailingChatterMatch[1].length >= 15) {
+  // Clean leading conversational openings like "Okay,", "Alright,", "So,", "Can you hear me? Okay,"
+  cleaned = cleaned.replace(/^(?:can you hear me\??|am i audible\??|testing 1 2 3\b|let\'s see\b|hello\b|hi\b|okay then\b|alright then\b|okay so\b|so\b|alright\b|okay\b)[\s,.-]+/i, '').trim();
+
+  // Strip trailing polite / phone chatter from questions (preserve all preceding sentences)
+  const trailingChatterMatch = cleaned.match(/^(.*[.?])\s+(?:thank you|thanks a lot|thanks|bye|goodbye|i'm calling|her phone|i don't know|in two rev|heading)[\s.,!?]*$/i);
+  if (trailingChatterMatch && trailingChatterMatch[1].length >= 12) {
     cleaned = trailingChatterMatch[1].trim();
   }
 
   // Strip trailing noise punctuation or filler words like "Right.", "Let's", etc.
   cleaned = cleaned.replace(/\s+(?:let's|heading|right|ok|okay)[\s.,!?]*$/i, '').trim();
 
-  return cleaned;
+  return cleaned || text.trim();
 }
 
 class TranscriptAccumulator {
@@ -238,21 +276,27 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
-    this.SETTLE_MS = 1800;    // settle after 1.8s of quiet
-    this.WINDOW_MS = 10000;   // 10-second question accumulation window max
+    this.SETTLE_MS = 1400;    // settle default after 1.4s of quiet
+    this.WINDOW_MS = 12000;   // 12-second question accumulation window max
   }
 
-  _getDynamicSettleMs() {
+  _getDynamicSettleMs(text) {
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
-    // If an answer is currently streaming, allow 2400ms of quiet before settling to protect the active answer
-    return isStreaming ? 2400 : this.SETTLE_MS;
+    if (isStreaming) return 2400;
+
+    const full = (this.committed ? this.committed + ' ' + (text || this.interim) : (text || this.interim)).trim();
+    if (isPremiseOnly(full)) return 1800; // Allow interviewer time to formulate question after setup
+    if (isCompleteDirectQuestion(full)) return 950; // Fast response for completed questions!
+    return this.SETTLE_MS;
   }
 
   isIncomplete(text) {
-    const t = (text || '').trim();
-    if (!t) return true;
-    return INCOMPLETE_TRAILING.test(t);
+    return isIncomplete(text);
+  }
+
+  isPremiseOnly(text) {
+    return isPremiseOnly(text);
   }
 
   isNoiseOnly(text) {
@@ -262,11 +306,16 @@ class TranscriptAccumulator {
   addInterim(text) {
     if (!this.speechStartTime) this.speechStartTime = Date.now();
     this.interim = text;
-    this._scheduleSettle(this._getDynamicSettleMs());
+    this._scheduleSettle(this._getDynamicSettleMs(text));
   }
 
   addFinal(text, speechFinal, words = []) {
-    if (this.isNoiseOnly(text)) return null;
+    const cleanChunk = (text || '').trim();
+    if (!cleanChunk) return null;
+
+    // Only skip isolated pure filler noises when buffer is empty
+    if (!this.committed && PURE_NOISE_OR_FILLER.test(cleanChunk)) return null;
+
     if (!this.speechStartTime) this.speechStartTime = Date.now();
 
     if (Array.isArray(words) && words.length > 0) {
@@ -275,21 +324,28 @@ class TranscriptAccumulator {
 
     // Append to committed buffer
     this.committed = this.committed
-      ? this.committed.trimEnd() + ' ' + text.trim()
-      : text.trim();
+      ? this.committed.trimEnd() + ' ' + cleanChunk
+      : cleanChunk;
     this.interim = '';
 
     const elapsed = Date.now() - this.speechStartTime;
 
     if (speechFinal) {
-      // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to window
-      if (this.isIncomplete(this.committed)) {
-        const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
+      // If trailing phrase is incomplete or premise setup, keep waiting
+      if (this.isIncomplete(this.committed) || this.isPremiseOnly(this.committed)) {
+        const remaining = Math.max(1200, Math.min(2200, this.WINDOW_MS - elapsed));
         this._scheduleSettle(remaining);
         return null;
       }
-      this._clearSettle();
-      return this._commit();
+
+      // If question is complete, commit fast
+      if (isCompleteDirectQuestion(this.committed)) {
+        this._clearSettle();
+        return this._commit();
+      }
+
+      this._scheduleSettle(this._getDynamicSettleMs());
+      return null;
     } else {
       this._scheduleSettle(this._getDynamicSettleMs());
     }
@@ -322,7 +378,7 @@ class TranscriptAccumulator {
     this.settleTimer = setTimeout(() => {
       const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
 
-      if (this.isIncomplete(full)) {
+      if (this.isIncomplete(full) || this.isPremiseOnly(full)) {
         const elapsed = this.speechStartTime ? Date.now() - this.speechStartTime : 0;
         if (elapsed < this.WINDOW_MS) {
           this._scheduleSettle(1000);
@@ -525,14 +581,32 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
   const wordCount = trimmed.split(/\s+/).length;
 
-  // ── Stitching Rule (ONLY for genuine incomplete questions or explicit qualifiers within 6s) ──
+  // ── Stitching Rule (merges multi-part questions, constraints, and follow-up continuations within 7.5s) ──
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
 
-  const lastWasIncomplete = lastQ && INCOMPLETE_TRAILING.test(lastQ.text.trim());
-  const isExplicitContinuation = /^(without using|using|in python|in sql|in typescript|in java|and how many|and also|with time complexity|with o\()/i.test(trimmed);
+  const lastHasQuestionMark = lastQ && (lastQ.text.trim().endsWith('?') || lastQ.text.trim().includes('?'));
+  const lastWasIncomplete = lastQ && !lastHasQuestionMark && (
+    isIncomplete(lastQ.text.trim()) ||
+    isPremiseOnly(lastQ.text.trim()) ||
+    lastQ.text.trim().split(/\s+/).length < 7
+  );
 
-  const isContinuation = timeSinceLastQ < 6000 && (lastWasIncomplete || isExplicitContinuation);
+  // Qualifiers and constraints that continue ANY question (even after '?')
+  const QUALIFIER_CONTINUATIONS = /^(without using|using|with time complexity|with space complexity|with o\(|in o\(|in-place|and also|what if|how about|what about)\b/i;
+  const REFERS_TO_PREVIOUS = /\b(it|that|this function|this query|the function|the query|the approach|the previous|optimize that|rewrite that|scale that)\b/i;
+  const LANGUAGE_SPECIFIER = /^(in python|in sql|in typescript|in javascript|in java|in c\+\+|in golang|in rust|in pyspark|in react)\b/i;
+
+  let isContinuation = false;
+  if (lastQ && timeSinceLastQ < 7500) {
+    if (lastWasIncomplete) {
+      // If previous question was an incomplete premise or clause, any question action or qualifier completes it!
+      isContinuation = true;
+    } else {
+      // If previous question was already a complete question with '?', only merge if it's an explicit constraint/qualifier or refers to previous logic
+      isContinuation = QUALIFIER_CONTINUATIONS.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed) || REFERS_TO_PREVIOUS.test(trimmed);
+    }
+  }
 
   if (lastQ && isContinuation) {
     // Abort previous partial answer
@@ -544,9 +618,12 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     // Clean up previous answer completely so no broken interrupted message is displayed
     session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
 
-    // Merge: "write a code for" + "palindrome" -> "write a code for palindrome"
-    lastQ.text = `${lastQ.text.trim()} ${trimmed}`;
-    lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text.trim()} ${rawText}`;
+    // Connect text cleanly
+    const prevText = lastQ.text.trim();
+    const isExplicitQualifier = QUALIFIER_CONTINUATIONS.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
+    const needsSeparator = !prevText.endsWith('.') && !prevText.endsWith('?') && !prevText.endsWith(',') && !isExplicitQualifier && !lastWasIncomplete;
+    lastQ.text = `${prevText}${needsSeparator ? ',' : ''} ${trimmed}`;
+    lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : prevText} ${rawText}`;
     lastQ.uncertainWords = analysis.uncertainWords;
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);
@@ -1099,6 +1176,9 @@ wss.on('connection', (ws) => {
           const session = sessions.get(sessionId);
           if (!session) return;
 
+          session.deepgramActive = true;
+          session.lastDeepgramTimestamp = Date.now();
+
           const transcript = payload.channel?.alternatives[0]?.transcript || '';
           const words = payload.channel?.alternatives[0]?.words || [];
           const isFinal = payload.is_final;
@@ -1107,14 +1187,11 @@ wss.on('connection', (ws) => {
 
           // Broadcast raw transcript to UI
           if (transcript.trim()) {
-            const tHash = hashText(transcript);
-            if (isFinal && session.seenTranscriptHashes.has(tHash)) return;
+            // Deduplicate immediately identical consecutive final chunks from Deepgram
             if (isFinal) {
-              session.seenTranscriptHashes.add(tHash);
-              if (session.seenTranscriptHashes.size > 200) {
-                const arr = [...session.seenTranscriptHashes];
-                session.seenTranscriptHashes = new Set(arr.slice(-100));
-              }
+              const tTrim = transcript.trim().toLowerCase();
+              if (session.lastFinalTranscript === tTrim) return;
+              session.lastFinalTranscript = tTrim;
             }
 
             broadcastToSession(sessionId, {
@@ -1127,6 +1204,7 @@ wss.on('connection', (ws) => {
             if (isFinal) {
               const committed = session.transcriptAccumulator.addFinal(transcript, speechFinal, words);
               if (committed) {
+                session.lastFinalTranscript = null;
                 commitQuestion(sessionId, committed, session, session.transcriptAccumulator.consumeWords(), committed, false);
               }
             } else {
@@ -1134,11 +1212,11 @@ wss.on('connection', (ws) => {
             }
           }
 
-          // VAD silence event — only commit if sentence is grammatically complete!
+          // VAD silence event — only commit if sentence is grammatically complete AND not just a setup premise!
           if (type === 'UtteranceEnd') {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
-            if (full && !acc.isIncomplete(full)) {
+            if (full && !acc.isIncomplete(full) && !acc.isPremiseOnly(full)) {
               // If an answer is currently streaming, don't commit silence events for casual chatter
               const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
               if (isCurrentlyStreaming) {
@@ -1147,6 +1225,7 @@ wss.on('connection', (ws) => {
                   return; // Don't interrupt streaming answer on quiet pauses/chatter
                 }
               }
+              session.lastFinalTranscript = null;
               const words = acc.consumeWords();
               const committed = acc.forceCommit();
               if (committed) commitQuestion(sessionId, committed, session, words, committed, false);
@@ -1250,9 +1329,14 @@ wss.on('connection', (ws) => {
         }
 
         case 'transcript_sync': {
-          // Web Speech API path (browser speech recognition)
+          // Web Speech API path (browser speech recognition fallback)
           const session = sessions.get(currentSessionId);
           if (!session) break;
+
+          // If Deepgram is actively streaming for this session, ignore duplicate Web Speech API transcripts!
+          if (session.deepgramActive && (Date.now() - (session.lastDeepgramTimestamp || 0) < 6000)) {
+            break;
+          }
 
           broadcastToSession(currentSessionId, {
             type: 'transcript_update',

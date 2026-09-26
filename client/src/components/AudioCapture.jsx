@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Mic, Monitor, Volume2, AlertCircle, CheckCircle, StopCircle } from 'lucide-react';
 
-export default function AudioCapture({ onAudioChunk, isListening, setIsListening, onTranscriptUpdate }) {
+export default function AudioCapture({ onAudioChunk, isListening, setIsListening, onTranscriptUpdate, deepgramActive }) {
   const [sourceType, setSourceType] = useState('tab');
   const [hasAudioTrack, setHasAudioTrack] = useState(null);
   const [trackLabel, setTrackLabel] = useState('');
@@ -14,10 +14,15 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
   const mediaRecorderRef = useRef(null);
   const speechRecognitionRef = useRef(null);
   const isListeningRef = useRef(isListening);
+  const deepgramActiveRef = useRef(deepgramActive);
 
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
+
+  useEffect(() => {
+    deepgramActiveRef.current = deepgramActive;
+  }, [deepgramActive]);
 
   // Web Speech API fallback with continuous auto-restart
   useEffect(() => {
@@ -34,7 +39,8 @@ export default function AudioCapture({ onAudioChunk, isListening, setIsListening
           if (event.results[i].isFinal) final += t;
           else interim += t;
         }
-        if (onTranscriptUpdate) {
+        // Only emit Web Speech API transcripts if Deepgram is not active (pure fallback)
+        if (onTranscriptUpdate && !deepgramActiveRef.current) {
           if (final) onTranscriptUpdate(final, true);
           else if (interim) onTranscriptUpdate(interim, false);
         }
