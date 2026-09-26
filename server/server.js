@@ -16,9 +16,9 @@ dotenv.config();
 //  Groq Models Configuration & Dynamic Health Discovery
 // ─────────────────────────────────────────────────────────────
 const DEFAULT_GROQ_MODELS = [
+  'qwen/qwen3.8-27b',
   'openai/gpt-oss-20b',
-  'openai/gpt-oss-120b',
-  'qwen/qwen3.8-27b'
+  'openai/gpt-oss-120b'
 ];
 
 let activeGroqModels = [...DEFAULT_GROQ_MODELS];
@@ -277,7 +277,7 @@ class TranscriptAccumulator {
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle default after 1.4s of quiet
-    this.WINDOW_MS = 12000;   // 12-second question accumulation window max
+    this.WINDOW_MS = 15000;   // 15-second question accumulation window max
   }
 
   _getDynamicSettleMs(text) {
@@ -413,12 +413,12 @@ class TranscriptAccumulator {
 function buildContext(session, currentQuestion) {
   const messages = session.messages || [];
 
-  // Collect previous completed exchanges (up to 4 most recent Q&A pairs)
-  // excluding the current question which was just added
+  // Retain only the immediate previous completed exchange (1 Q&A pair)
+  // to maintain follow-up continuity without exhausting Groq's 8,000 TPM limit
   const completedPairs = [];
   const completedQuestions = messages.filter(m => m.role === 'question' && m.status === 'complete');
   const previousQuestions = completedQuestions.filter(q => q.text.trim().toLowerCase() !== currentQuestion.trim().toLowerCase());
-  const recentQuestions = previousQuestions.slice(-4);
+  const recentQuestions = previousQuestions.slice(-1);
 
   for (const q of recentQuestions) {
     const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && m.status === 'complete' && m.text.trim());
@@ -441,20 +441,22 @@ function buildContext(session, currentQuestion) {
     }
   }
 
-  // Build multi-turn chat messages for LLM context
+  // Build compact multi-turn chat messages for LLM context
   const conversationHistory = [];
   for (const item of completedPairs) {
     conversationHistory.push({
       role: 'user',
       content: `INTERVIEW QUESTION: "${item.question}"`
     });
-    // Bounded answer to keep prompt clean while preserving code and key logic
-    const boundedAnswer = item.answer.length > 1200
-      ? item.answer.slice(0, 1200) + '\n...(truncated for length)'
-      : item.answer;
+    // Extract code block or compact text up to 350 chars to prevent token bloat
+    const codeMatch = item.answer.match(/```[\s\S]*?```/);
+    const compactAnswer = codeMatch
+      ? codeMatch[0]
+      : (item.answer.length > 350 ? item.answer.slice(0, 350) + '...' : item.answer);
+
     conversationHistory.push({
       role: 'assistant',
-      content: boundedAnswer
+      content: compactAnswer
     });
   }
 
@@ -475,68 +477,29 @@ function buildContext(session, currentQuestion) {
 //  System prompt — continuity, language consistency, simple answers & clean code
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, parentQuestion, parentAnswer, activeCodingLanguage } = ctx;
+  const { candidate, parentQuestion, activeCodingLanguage } = ctx;
   const defaultLang = candidate.preferredLanguage || 'Python';
   const effectiveLang = activeCodingLanguage || defaultLang;
 
-  let followUpSection = '';
+  let followUpNote = '';
   if (parentQuestion) {
-    followUpSection = `
-RECENT CONVERSATION CONTEXT:
-* Previous Question: "${parentQuestion}"
-* Previous Answer Summary: ${parentAnswer ? parentAnswer.slice(0, 600) : '(none)'}
-* This interview is an ongoing conversation. When the current question asks for optimization, edge cases, explanation, variations, or refers to "it", "that", "the function", or "the query", DIRECTLY build upon the previous solution above.`;
+    followUpNote = `\nFOLLOW-UP: When asked to optimize, rewrite, explain, or when referring to "it" or "that", directly build upon the previous solution in the chat history.`;
   }
 
-  return `You are a real-time interview response assistant designed to help candidates answer technical questions with confidence, clarity, and precision.
+  return `You are a real-time interview response assistant helping candidates answer technical interview questions with precision, confidence, and speed.
 
-CANDIDATE PROFILE:
+ROLE & PROFILE:
 - Target Role: ${candidate.targetRole}
-- Résumé: ${candidate.resume}
-- Projects: ${candidate.projects}
-- Job Description: ${candidate.jobDescription}
-- Preferred Coding Language: ${defaultLang}
-- Language: ${candidate.language || 'English'}
-- Rules: ${candidate.guardrails}
-${followUpSection}
+- Skills: React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks.
+- Preferred Language: ${defaultLang}
+- Active Language: ${effectiveLang}
+${followUpNote}
 
-ANSWER GENERATION INSTRUCTIONS:
-- Explain in simple everyday English. Assume the reader is a beginner. Start directly with the answer. Use short sentences and natural wording that is easy to say aloud.
-- For a normal question, aim for 2–4 short sentences. Use a few brief bullets only when listing steps or comparing points.
-- Answer every part of a multi-part question. Add length only when needed to cover the question accurately.
-- Use necessary technical terms, but explain unfamiliar terms briefly. Avoid complicated wording, lengthy introductions, repetition, filler, and unrelated details. Never start with "Certainly!", "Great question!", or "Here is the answer."
-- For follow-up questions, use the earlier conversation and answer the new point directly.
-- Treat these as writing guidelines, not hard limits that cut off an incomplete answer.
-
-CONVERSATION CONTINUITY & FOLLOW-UPS:
-- You have the recent conversation history between the interviewer and candidate.
-- Maintain continuous context across questions. When the interviewer says "can you optimize that?", "what if there are duplicates?", "rewrite it", "how will this scale?", "write tests for it", or refers to earlier code with "it" or "this", reference and build upon what was already discussed.
-- Never ask the interviewer to repeat or re-state what they are referring to.
-- If asked to modify or optimize a solution, build directly on the specific logic and variable names already established.
-
-CODING LANGUAGE CONSISTENCY & RULES:
-- Primary default language: ${defaultLang}
-- Current active interview language: ${effectiveLang}
-- Follow this strict hierarchy to select the programming language for any code block:
-  1. EXPLICIT INTERVIEWER REQUEST: If the interviewer asks for a specific language or technology (e.g. "in SQL", "in Python", "using PySpark", "in TypeScript", "in Java", "in C++"), ALWAYS use that requested language.
-  2. FOLLOW-UP CONTINUITY: When modifying, optimizing, explaining, or writing tests for previous code, ALWAYS stay in the SAME language (${effectiveLang}) unless the interviewer explicitly asked to switch or translate.
-  3. DOMAIN DEFAULTS (when no language is mentioned):
-     * Relational DB queries, aggregations, window functions, schema/table transformations: SQL (PostgreSQL standard).
-     * Big data pipelines, distributed dataframes, Databricks ETL: PySpark.
-     * Algorithms, data structures, backend functions, math, scripting: ${defaultLang}.
-     * Web frontend, UI components, React: JavaScript or TypeScript.
-  4. NO RANDOM LANGUAGE SWITCHING: Never switch between Java, C++, Python, JavaScript, etc., from one question to the next. Consistency across the interview is strictly required.
-
-CODING GUIDELINES:
-- Provide one straightforward, correct solution adhering to the language rules above.
-- Always include the language identifier in the code fence (e.g. \`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql).
-- Use readable variable names, necessary imports, and a small number of clear steps. Avoid unnecessary classes, helper layers, repeated setup, excessive comments, and clever one-liners that are hard to explain.
-- Keep lines reasonably short by using valid source-code line breaks. Do not alter identifiers, string contents, or logic just to shorten a line.
-- For coding answers, normally provide:
-  * One short sentence explaining the approach.
-  * One complete code block for the requested task.
-  * Two short sentences explaining the important steps.
-- Do NOT automatically generate "Edge Cases," "Time Complexity," or "Space Complexity" sections. If the interviewer specifically asks about one of these topics, answer that question briefly in normal language without adding unnecessary sections.`;
+RULES:
+1. Explain simply in 2–4 short sentences. Start directly with the answer. No intro pleasantries or filler.
+2. If asked to code: give one short sentence of approach, one clean code block with language fence (\`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql), and two short sentences explaining key logic.
+3. Language hierarchy: (a) Use explicitly requested language; (b) For follow-up code, stay in ${effectiveLang}; (c) SQL for DB queries; (d) PySpark for data pipelines; (e) ${defaultLang} for general algorithms.
+4. Do not include unnecessary boilerplate, filler classes, or unsolicited complexity sections unless specifically asked.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -643,10 +606,10 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     return;
   }
 
-  // Auto-expire answers stuck in 'streaming' older than 30s to prevent stream lock
+  // Auto-expire answers stuck in 'streaming' older than 12s to prevent stream lock
   const now = Date.now();
   for (const m of session.messages) {
-    if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 30000) {
+    if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 12000) {
       m.status = 'complete';
       console.log(`[Server] Auto-expired stale streaming answer ${m.id}`);
     }
@@ -701,10 +664,9 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   if (session.activeAbort) {
     session.activeAbort.abort();
     session.activeAbort = null;
-    const inProgress = [...session.messages].reverse().find(m => m.role === 'answer' && m.status === 'streaming');
-    if (inProgress) {
-      // If the answer has already generated substantial text (> 80 chars), preserve it as complete!
-      // This prevents the candidate from seeing an annoying yellow "Interrupted" badge on a readable answer.
+  }
+  for (const inProgress of session.messages) {
+    if (inProgress.role === 'answer' && inProgress.status === 'streaming') {
       const hasSubstantialText = (inProgress.text || '').trim().length > 80;
       inProgress.status = hasSubstantialText ? 'complete' : 'interrupted';
       inProgress.totalTime = inProgress.totalTime || (Date.now() - (inProgress.createdAt || Date.now()));
@@ -784,124 +746,114 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   const candidateModels = activeGroqModels.length > 0 ? activeGroqModels : DEFAULT_GROQ_MODELS;
 
   let succeeded = false;
-  let lastError = null;
 
-  // Pass 1: Try each model with 400ms rate-limit backoff
-  // Pass 2: If rate limited on all models, wait 800ms for quota replenishment and retry
-  for (let pass = 0; pass < 2 && !succeeded; pass++) {
-    for (const model of candidateModels) {
-      if (abort.signal.aborted) break;
+  for (const model of candidateModels) {
+    if (abort.signal.aborted) break;
 
-      try {
-        const stream = await groq.chat.completions.create({
-          messages: chatMessages,
-          model,
-          temperature: 0.25,
-          max_tokens: 800,
-          reasoning_format: 'hidden',
-          stream: true
-        }, { signal: abort.signal });
+    try {
+      const isGptOss = model.includes('gpt-oss');
+      const createParams = {
+        messages: chatMessages,
+        model,
+        temperature: 0.25,
+        max_tokens: 450,
+        stream: true
+      };
+      if (isGptOss) {
+        createParams.reasoning_format = 'hidden';
+      }
 
-        let seqNo = 0;
-        let accumulated = continueFromText;
-        let ttftSent = false;
+      const stream = await groq.chat.completions.create(createParams, { signal: abort.signal });
 
-        for await (const chunk of stream) {
-          if (abort.signal.aborted) break;
+      let seqNo = 0;
+      let accumulated = continueFromText;
+      let ttftSent = false;
 
-          // Reject if session moved to a new request
-          if (session.activeReqId !== reqId) break;
-
-          const text = chunk.choices[0]?.delta?.content || '';
-          if (!text) continue;
-
-          accumulated += text;
-          aMsg.text = accumulated;
-
-          if (!ttftSent) {
-            ttftSent = true;
-            aMsg.ttft = Date.now() - startTime;
-            broadcastToSession(sessionId, {
-              type: 'chat_start',
-              msgId: aMsgId,
-              reqId,
-              ttft: aMsg.ttft,
-              sessionId
-            });
-          }
-
-          broadcastToSession(sessionId, {
-            type: 'chat_chunk',
-            msgId: aMsgId,
-            reqId,
-            seqNo: seqNo++,
-            chunk: text,
-            fullText: accumulated,
-            sessionId
-          });
-        }
-
-        if (!abort.signal.aborted && session.activeReqId === reqId) {
-          const totalTime = Date.now() - startTime;
-          aMsg.status = 'complete';
-          aMsg.totalTime = totalTime;
-
-          // Remember code language used so subsequent follow-ups stay in this language
-          const codeLangMatch = accumulated.match(/```(\w+)/);
-          if (codeLangMatch && codeLangMatch[1]) {
-            session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
-          }
-
-          broadcastToSession(sessionId, {
-            type: 'chat_done',
-            msgId: aMsgId,
-            reqId,
-            fullText: accumulated,
-            totalTime,
-            sessionId
-          });
-
-          // Reset pending hash so same question can be re-asked later
-          session.pendingQuestionHash = null;
-          session.activeReqId = null;
-          session.activeAbort = null;
-        }
-        succeeded = true;
-        return; // success — exit model loop
-
-      } catch (err) {
-        lastError = err;
+      for await (const chunk of stream) {
         if (abort.signal.aborted) break;
 
-        const status = err.status || err.statusCode;
+        // Reject if session moved to a new request
+        if (session.activeReqId !== reqId) break;
 
-        if (status === 404 || status === 400) {
-          console.warn(`[Groq] Model ${model} unavailable (${status}). Pruning from active models.`);
-          activeGroqModels = activeGroqModels.filter(m => m !== model);
-          continue;
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (!text) continue;
+
+        accumulated += text;
+        aMsg.text = accumulated;
+
+        if (!ttftSent) {
+          ttftSent = true;
+          aMsg.ttft = Date.now() - startTime;
+          broadcastToSession(sessionId, {
+            type: 'chat_start',
+            msgId: aMsgId,
+            reqId,
+            ttft: aMsg.ttft,
+            sessionId
+          });
         }
 
-        if (status === 429) {
-          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 400ms...`);
-          await new Promise(r => setTimeout(r, 400));
-          continue;
-        }
-
-        if (status === 401) {
-          console.warn(`[Groq] 401 Auth error. Falling back to local responder.`);
-          break; // break to fallback
-        }
-
-        console.warn(`[Groq] Model ${model} error: ${err.message}. Trying next model...`);
+        broadcastToSession(sessionId, {
+          type: 'chat_chunk',
+          msgId: aMsgId,
+          reqId,
+          seqNo: seqNo++,
+          chunk: text,
+          fullText: accumulated,
+          sessionId
+        });
       }
-    }
 
-    if (!succeeded && pass === 0 && !abort.signal.aborted) {
-      const isRateLimit = lastError && (lastError.status === 429 || lastError.statusCode === 429);
-      if (isRateLimit) {
-        console.warn(`[Groq] Temporary rate limit on all models. Backing off 800ms before retry...`);
-        await new Promise(r => setTimeout(r, 800));
+      if (!abort.signal.aborted && session.activeReqId === reqId) {
+        const totalTime = Date.now() - startTime;
+        aMsg.status = 'complete';
+        aMsg.totalTime = totalTime;
+
+        // Remember code language used so subsequent follow-ups stay in this language
+        const codeLangMatch = accumulated.match(/```(\w+)/);
+        if (codeLangMatch && codeLangMatch[1]) {
+          session.activeCodingLanguage = codeLangMatch[1].toLowerCase();
+        }
+
+        broadcastToSession(sessionId, {
+          type: 'chat_done',
+          msgId: aMsgId,
+          reqId,
+          fullText: accumulated,
+          totalTime,
+          sessionId
+        });
+
+        // Reset pending hash so same question can be re-asked later
+        session.pendingQuestionHash = null;
+        session.activeReqId = null;
+        session.activeAbort = null;
       }
+      succeeded = true;
+      return; // success — exit model loop
+
+    } catch (err) {
+      if (abort.signal.aborted) break;
+
+      const status = err.status || err.statusCode;
+
+      if (status === 404 || status === 400) {
+        console.warn(`[Groq] Model ${model} unavailable (${status}). Pruning from active models.`);
+        activeGroqModels = activeGroqModels.filter(m => m !== model);
+        continue;
+      }
+
+      if (status === 429) {
+        console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model immediately...`);
+        continue;
+      }
+
+      if (status === 401) {
+        console.warn(`[Groq] 401 Auth error. Falling back to local responder.`);
+        break;
+      }
+
+      console.warn(`[Groq] Model ${model} error: ${err.message}. Trying next model...`);
     }
   }
 

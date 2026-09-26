@@ -8,6 +8,31 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+      // Filter out noisy third-party browser extension errors (e.g. CISPL SignerDigital, Chrome runtime messaging)
+      window.addEventListener('unhandledrejection', function(event) {
+        var msg = (event && event.reason && (event.reason.message || event.reason)) || '';
+        if (typeof msg === 'string' && (
+          msg.includes('message channel closed before a response was received') ||
+          msg.includes('SignerDigital') ||
+          msg.includes('Extension context invalidated') ||
+          msg.includes('Receiving end does not exist')
+        )) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+      window.addEventListener('error', function(event) {
+        var msg = (event && (event.message || event.error && event.error.message)) || '';
+        if (typeof msg === 'string' && (
+          msg.includes('message channel closed') ||
+          msg.includes('SignerDigital')
+        )) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>

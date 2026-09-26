@@ -293,12 +293,14 @@ export default function App() {
         break;
 
       case 'chat_interrupted':
+        activeReqIdRef.current = null;
         if (data.msgId) {
           patchMessage(data.msgId, { status: 'interrupted' });
         }
         break;
 
       case 'chat_error':
+        activeReqIdRef.current = null;
         patchMessage(data.msgId, {
           status: 'error',
           errorMessage: data.message
