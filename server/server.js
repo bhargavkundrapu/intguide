@@ -85,10 +85,74 @@ const candidateContext = {
 // ─────────────────────────────────────────────────────────────
 //  Technical Vocabulary & Deepgram Keyterm Prompting
 // ─────────────────────────────────────────────────────────────
-const technicalVocabulary = new Set();
+const DEFAULT_TECH_VOCABULARY = [
+  'PySpark', 'SparkSession', 'DataFrame', 'Delta Lake', 'Delta Log', 'ACID',
+  'salting', 'partitionBy', 'repartition', 'coalesce', 'broadcast join',
+  'sort-merge join', 'hash join', 'shuffle', 'data skew', 'Spark UI',
+  'executor', 'Databricks', 'Counter', 'in-place', 'concurrency',
+  'snapshot isolation', 'time-travel', 'schema enforcement', 'GC pauses',
+  'OOM', 'out-of-memory', 'DAG', 'stage', 'task metrics', 'spill to disk',
+  'small files', 'cluster resources', 'PostgreSQL', 'TypeScript', 'React',
+  'Node.js', 'WebSockets', 'Redis', 'Kafka', 'Docker', 'Kubernetes'
+];
+const technicalVocabulary = new Set(DEFAULT_TECH_VOCABULARY);
 
 function getTechnicalVocabularyList() {
   return Array.from(technicalVocabulary);
+}
+
+// Clean immediate duplicate words ('highly highly') and duplicate phrases (up to 12 words)
+function cleanTranscriptDuplicates(text) {
+  if (!text) return '';
+  let words = text.trim().split(/\s+/);
+  if (words.length <= 1) return text.trim();
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const maxLen = Math.min(12, Math.floor(words.length / 2));
+    for (let len = maxLen; len >= 1; len--) {
+      for (let i = 0; i <= words.length - 2 * len; i++) {
+        let match = true;
+        for (let j = 0; j < len; j++) {
+          if (words[i + j].toLowerCase().replace(/[.,!?;:]/g, '') !== words[i + len + j].toLowerCase().replace(/[.,!?;:]/g, '')) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          words.splice(i + len, len);
+          changed = true;
+          break;
+        }
+      }
+      if (changed) break;
+    }
+  }
+  return words.join(' ');
+}
+
+// Seamlessly merge incoming transcript with existing buffer by detecting suffix/prefix word overlaps
+function mergeWithOverlap(existing, incoming) {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+  const eWords = existing.trim().split(/\s+/);
+  const iWords = incoming.trim().split(/\s+/);
+
+  const maxOverlap = Math.min(eWords.length, iWords.length);
+  for (let k = maxOverlap; k >= 1; k--) {
+    let match = true;
+    for (let j = 0; j < k; j++) {
+      if (eWords[eWords.length - k + j].toLowerCase().replace(/[.,!?;:]/g, '') !== iWords[j].toLowerCase().replace(/[.,!?;:]/g, '')) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      return eWords.concat(iWords.slice(k)).join(' ');
+    }
+  }
+  return existing + ' ' + incoming;
 }
 
 // Critical words classification for word-level confidence checking
@@ -209,13 +273,20 @@ function isPremiseOnly(text) {
 }
 
 // Incomplete trailing phrases or unfinished thoughts
-const INCOMPLETE_TRAILING = /\b(?:for|to|in|into|with|without|using|and|or|by|from|of|about|that|like|as|a|an|the|this|these|those|is|are|was|were|be|been|have|has|had|do|does|did|can|could|will|would|should|may|might|which|who|where|when|why|how|if|whether|because|since|while|so|but|such as|for example|between|either|neither|both|than|including)\s*$/i;
+const INCOMPLETE_TRAILING = /\b(?:for|to|in|into|with|without|using|and|or|by|from|of|about|that|like|as|a|an|the|this|these|those|is|are|was|were|be|been|have|has|had|do|does|did|can|could|will|would|should|may|might|which|who|where|when|why|how|if|whether|because|since|while|so|but|such as|for example|between|either|neither|both|than|including|covering|during|highly|such|via|onto|upon|through|across|each|every|per|plus|role)\s*$/i;
 
-const INCOMPLETE_PHRASES = /(?:write a|how to|how do|how would|how can|what is|what are|what does|why does|can you|could you|would you|is it|does it|will it|to find|to get|to check|to implement|to calculate|to optimize|in terms of|with respect to|based on|depending on)\s*$/i;
+const INCOMPLETE_PHRASES = /(?:write a|how to|how do|how would|how can|what is|what are|what does|why does|can you|could you|would you|is it|does it|will it|to find|to get|to check|to implement|to calculate|to optimize|in terms of|with respect to|based on|depending on|and what role|what role does|play during|that normally completes)\s*$/i;
+
+// Leading continuation phrases that indicate a fragment attaching to an ongoing question
+const ORPHANED_CONTINUATION_REGEX = /^(?:and\b|or\b|plus\b|also\b|along with\b|as well as\b|and what role\b|what role\b|play during\b|playing during\b|covering\b|data skew\b|partitions\b|shuffle\b|joins\b|memory spills\b|small files\b)/i;
 
 function isIncomplete(text) {
   const t = (text || '').trim();
   if (!t) return true;
+  // Ends with a comma (e.g. "partitions,")
+  if (/,\s*$/.test(t)) return true;
+  // Starts with an orphaned continuation clause or conjunction (e.g. "and what role...", "play during...")
+  if (ORPHANED_CONTINUATION_REGEX.test(t)) return true;
   return INCOMPLETE_TRAILING.test(t) || INCOMPLETE_PHRASES.test(t);
 }
 
@@ -256,6 +327,13 @@ function sanitizeQuestionText(text) {
   let cleaned = (text || '').trim();
   if (!cleaned) return '';
 
+  // Phonetic corrections for common technical mishearings by STT
+  cleaned = cleaned
+    .replace(/\b(?:pis|pie\s*spark)\s+barcode\b/gi, 'PySpark code')
+    .replace(/\b(?:pis|pie)\s*spark\b/gi, 'PySpark')
+    .replace(/\bdelta\s+like\b/gi, 'Delta Lake')
+    .replace(/\bacid\b/gi, 'ACID');
+
   // Clean leading conversational openings like "Okay,", "Alright,", "So,", "Can you hear me? Okay,"
   cleaned = cleaned.replace(/^(?:can you hear me\??|am i audible\??|testing 1 2 3\b|let\'s see\b|hello\b|hi\b|okay then\b|alright then\b|okay so\b|so\b|alright\b|okay\b)[\s,.-]+/i, '').trim();
 
@@ -268,7 +346,7 @@ function sanitizeQuestionText(text) {
   // Strip trailing noise punctuation or filler words like "Right.", "Let's", etc.
   cleaned = cleaned.replace(/\s+(?:let's|heading|right|ok|okay)[\s.,!?]*$/i, '').trim();
 
-  return cleaned || text.trim();
+  return cleanTranscriptDuplicates(cleaned) || text.trim();
 }
 
 class TranscriptAccumulator {
@@ -285,8 +363,9 @@ class TranscriptAccumulator {
 
   _getDynamicSettleMs(text) {
     const full = (this.committed ? this.committed + ' ' + (text || this.interim) : (text || this.interim)).trim();
-    if (isCompleteDirectQuestion(full)) return 900;
-    if (isPremiseOnly(full)) return 1800; // Allow interviewer time to formulate question after setup
+    if (full.endsWith('?') && isCompleteDirectQuestion(full)) return 800; // Punctuation question mark
+    if (isPremiseOnly(full)) return 2000; // Allow interviewer time to formulate question after setup
+    if (isIncomplete(full)) return 2000;
 
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
@@ -330,10 +409,9 @@ class TranscriptAccumulator {
       this.words.push(...words);
     }
 
-    // Append to committed buffer
-    this.committed = this.committed
-      ? this.committed.trimEnd() + ' ' + cleanChunk
-      : cleanChunk;
+    // Merge incoming chunk using overlap deduplication and clean word repetitions
+    const merged = mergeWithOverlap(this.committed, cleanChunk);
+    this.committed = cleanTranscriptDuplicates(merged);
     this.interim = '';
 
     const elapsed = Date.now() - this.speechStartTime;
@@ -341,17 +419,18 @@ class TranscriptAccumulator {
     if (speechFinal) {
       // If trailing phrase is incomplete or premise setup, keep waiting
       if (this.isIncomplete(this.committed) || this.isPremiseOnly(this.committed)) {
-        const remaining = Math.max(1200, Math.min(2200, this.WINDOW_MS - elapsed));
+        const remaining = Math.max(1400, Math.min(2500, this.WINDOW_MS - elapsed));
         this._scheduleSettle(remaining);
         return null;
       }
 
-      // If question is complete, commit fast
-      if (isCompleteDirectQuestion(this.committed)) {
-        this._clearSettle();
-        return this._commit();
+      // If question ends with an explicit question mark '?', settle fast (750ms)
+      if (this.committed.endsWith('?') && isCompleteDirectQuestion(this.committed)) {
+        this._scheduleSettle(750);
+        return null;
       }
 
+      // Allow 1200ms-1400ms settle so multi-part questions accumulate together without premature cutoff
       this._scheduleSettle(this._getDynamicSettleMs());
       return null;
     } else {
@@ -421,12 +500,12 @@ class TranscriptAccumulator {
 function buildContext(session, currentQuestion) {
   const messages = session.messages || [];
 
-  // Retain only the immediate previous completed exchange (1 Q&A pair)
-  // to maintain follow-up continuity without exhausting Groq's 8,000 TPM limit
+  // Retain the last 2 completed Q&A pairs for deep multi-turn continuity
+  // without exhausting Groq's 8,000 TPM limit
   const completedPairs = [];
   const completedQuestions = messages.filter(m => m.role === 'question' && m.status === 'complete');
   const previousQuestions = completedQuestions.filter(q => q.text.trim().toLowerCase() !== currentQuestion.trim().toLowerCase());
-  const recentQuestions = previousQuestions.slice(-1);
+  const recentQuestions = previousQuestions.slice(-2);
 
   for (const q of recentQuestions) {
     const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && (m.status === 'complete' || m.status === 'interrupted') && m.text && m.text.trim().length > 30);
@@ -451,6 +530,18 @@ function buildContext(session, currentQuestion) {
       const codeMatch = completedPairs[i].answer.match(/```(\w+)/);
       if (codeMatch && codeMatch[1]) {
         session.activeCodingLanguage = codeMatch[1].toLowerCase();
+        break;
+      }
+    }
+  }
+
+  // Detect recent technical domain/topic from conversation history
+  let parentTopic = null;
+  if (completedPairs.length > 0) {
+    for (let i = completedPairs.length - 1; i >= 0; i--) {
+      const match = completedPairs[i].question.match(TECH_TOPIC_REGEX);
+      if (match) {
+        parentTopic = match[0].toUpperCase() + ' architecture & optimization';
         break;
       }
     }
@@ -482,6 +573,7 @@ function buildContext(session, currentQuestion) {
     isFollowUp: completedPairs.length > 0,
     parentQuestion: lastPair?.question || null,
     parentAnswer: lastPair?.answer || null,
+    parentTopic,
     conversationHistory,
     activeCodingLanguage: session.activeCodingLanguage || null,
     candidate: candidateContext,
@@ -492,13 +584,15 @@ function buildContext(session, currentQuestion) {
 //  System prompt — continuity, language consistency, simple answers & clean code
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, parentQuestion, activeCodingLanguage } = ctx;
+  const { candidate, parentQuestion, parentTopic, activeCodingLanguage } = ctx;
   const defaultLang = candidate.preferredLanguage || 'Python';
   const effectiveLang = activeCodingLanguage || defaultLang;
 
-  let followUpNote = '';
-  if (parentQuestion) {
-    followUpNote = `\nFOLLOW-UP: When asked to optimize, rewrite, explain, or when referring to "it" or "that", directly build upon the previous solution in the chat history.`;
+  let topicNote = '';
+  if (parentTopic || parentQuestion) {
+    topicNote = `\nINTERVIEW CONTINUITY:
+- Ongoing Topic: ${parentTopic || parentQuestion}
+- Seamlessly build upon the established technical context. If the question refers to a sub-part, clause, or follow-up (e.g. data skew, partitions, salting, transaction log), answer directly within this ongoing topic architecture.`;
   }
 
   return `You are a real-time interview response assistant helping candidates answer technical interview questions with precision, confidence, and speed.
@@ -508,13 +602,14 @@ ROLE & PROFILE:
 - Skills: React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks.
 - Preferred Language: ${defaultLang}
 - Active Language: ${effectiveLang}
-${followUpNote}
+${topicNote}
 
 RULES:
-1. Explain simply in 2–4 short sentences. Start directly with the answer. No intro pleasantries or filler.
-2. If asked to code: give one short sentence of approach, one clean code block with language fence (\`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql), and two short sentences explaining key logic.
-3. Language hierarchy: (a) Use explicitly requested language; (b) For follow-up code, stay in ${effectiveLang}; (c) SQL for DB queries; (d) PySpark for data pipelines; (e) ${defaultLang} for general algorithms.
-4. Do not include unnecessary boilerplate, filler classes, or unsolicited complexity sections unless specifically asked.`;
+1. Direct, concise answer in 2–4 short sentences. Start directly with the technical answer. No conversational filler or greetings.
+2. CRITICAL CONSTRAINT: NEVER ask clarifying questions, NEVER ask "Could you clarify...", and NEVER ask the user/interviewer for more information. Under all circumstances, provide the direct, best-practice technical answer immediately based on the most likely interview intent.
+3. If asked to code: give one short sentence of approach, one clean code block with language fence (\`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql), and two short sentences explaining key logic.
+4. Language hierarchy: (a) Use explicitly requested language; (b) For follow-up code, stay in ${effectiveLang}; (c) SQL for DB queries; (d) PySpark for data pipelines; (e) ${defaultLang} for general algorithms.
+5. Do not include unnecessary boilerplate, filler classes, or unsolicited complexity sections unless specifically asked.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -575,15 +670,19 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const LANGUAGE_SPECIFIER = /^(in python|in sql|in typescript|in javascript|in java|in c\+\+|in golang|in rust|in pyspark|in react)\b/i;
 
   let isContinuation = false;
-  if (lastQ && timeSinceLastQ < 7500) {
-    if (lastWasIncomplete) {
-      // If previous question was an incomplete premise or clause, any question action or qualifier completes it!
+  if (lastQ && timeSinceLastQ < 10000) {
+    const prevClean = lastQ.text.trim().toLowerCase();
+    const currClean = trimmed.toLowerCase();
+
+    // 1. Subsumption: new question starts with or contains previous question's opening
+    const isSubsumed = currClean.startsWith(prevClean.slice(0, Math.min(25, prevClean.length))) ||
+                       prevClean.startsWith(currClean.slice(0, Math.min(25, currClean.length)));
+
+    // 2. Fragment continuation: starts with orphaned conjunction, qualifier, or topic continuation
+    const isFragment = ORPHANED_CONTINUATION_REGEX.test(trimmed) || PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
+
+    if (isSubsumed || lastWasIncomplete || isFragment) {
       isContinuation = true;
-    } else {
-      // If previous question was already a complete question, only merge if it's a pure inline constraint or language specifier.
-      // Standalone extra questions (with question intent or '?') commit as their own question cards!
-      const isStandaloneQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
-      isContinuation = !isStandaloneQuestion && (PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed));
     }
   }
 
@@ -594,15 +693,13 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
       session.activeAbort = null;
     }
 
-    // Clean up previous answer completely so no broken interrupted message is displayed
+    // Clean up previous answer completely so no broken or duplicate message is displayed
     session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
 
-    // Connect text cleanly
-    const prevText = lastQ.text.trim();
-    const isExplicitQualifier = PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
-    const needsSeparator = !prevText.endsWith('.') && !prevText.endsWith('?') && !prevText.endsWith(',') && !isExplicitQualifier && !lastWasIncomplete;
-    lastQ.text = `${prevText}${needsSeparator ? ',' : ''} ${trimmed}`;
-    lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : prevText} ${rawText}`;
+    // Connect text cleanly with overlap detection and duplicate cleaning
+    const merged = mergeWithOverlap(lastQ.text.trim(), trimmed);
+    lastQ.text = cleanTranscriptDuplicates(merged);
+    lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text} ${rawText}`;
     lastQ.uncertainWords = analysis.uncertainWords;
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);

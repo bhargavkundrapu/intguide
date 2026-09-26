@@ -224,14 +224,15 @@ export default function App() {
               uncertainWords: data.uncertainWords !== undefined ? data.uncertainWords : m.uncertainWords,
               isEdited: data.isEdited !== undefined ? data.isEdited : m.isEdited
             } : m))
-            .filter(m => !(m.role === 'answer' && m.parentId === data.msgId && m.status !== 'complete'))
+            .filter(m => !(m.role === 'answer' && m.parentId === data.msgId))
         );
         break;
 
       // ── Answer streaming events ──
       case 'chat_message':
-        // New answer message created
+        // New answer message created - ensure only one active answer per parent question
         activeReqIdRef.current = data.reqId;
+        setMessages(prev => prev.filter(m => !(m.role === 'answer' && m.parentId === data.parentId && m.id !== data.msgId)));
         upsertMessage({
           id: data.msgId,
           role: 'answer',
