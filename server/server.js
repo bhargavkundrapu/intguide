@@ -429,7 +429,7 @@ function buildContext(session, currentQuestion) {
   const recentQuestions = previousQuestions.slice(-1);
 
   for (const q of recentQuestions) {
-    const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && m.status === 'complete' && m.text.trim());
+    const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && (m.status === 'complete' || m.status === 'interrupted') && m.text && m.text.trim().length > 30);
     if (a) {
       completedPairs.push({
         question: q.text.trim(),
@@ -438,8 +438,15 @@ function buildContext(session, currentQuestion) {
     }
   }
 
-  // Detect or update active coding language from recent answers if not explicitly set
-  if (!session.activeCodingLanguage && completedPairs.length > 0) {
+  // Detect explicit coding language from current question (e.g., "in Python", "using SQL", "in TypeScript")
+  const explicitLangMatch = currentQuestion.match(/\b(?:in|using|with)\s+(python|sql|typescript|javascript|java|c\+\+|cpp|golang|go|rust|pyspark|c#|scala)\b/i);
+  if (explicitLangMatch && explicitLangMatch[1]) {
+    let matched = explicitLangMatch[1].toLowerCase();
+    if (matched === 'cpp') matched = 'c++';
+    if (matched === 'go') matched = 'golang';
+    session.activeCodingLanguage = matched;
+  } else if (!session.activeCodingLanguage && completedPairs.length > 0) {
+    // Or detect from recent answer code blocks if not explicitly set
     for (let i = completedPairs.length - 1; i >= 0; i--) {
       const codeMatch = completedPairs[i].answer.match(/```(\w+)/);
       if (codeMatch && codeMatch[1]) {
@@ -1135,7 +1142,7 @@ wss.on('connection', (ws) => {
         try {
           const payload = JSON.parse(dgMsg.toString());
           const session = sessions.get(sessionId);
-          if (!session) return;
+          if (!session || session.isPaused) return;
 
           session.deepgramActive = true;
           session.lastDeepgramTimestamp = Date.now();
@@ -1212,6 +1219,7 @@ wss.on('connection', (ws) => {
     if (isBinary) {
       const activeSessionId = currentSessionId || 'SESSION-1';
       const session = getOrCreateSession(activeSessionId);
+      if (session?.isPaused) return;
       if (!session.initialWebmHeader && message.length > 0) {
         session.initialWebmHeader = Buffer.from(message);
         console.log(`[Audio] Cached initial WebM header chunk (${message.length} bytes) for session ${activeSessionId}`);
@@ -1266,6 +1274,7 @@ wss.on('connection', (ws) => {
             session: currentSessionId,
             role: userRole,
             mobileCount: session.mobileWss.size,
+            isPaused: Boolean(session.isPaused),
             history: session.messages.slice(-40),
             currentTranscript
           }));
@@ -1378,6 +1387,8 @@ wss.on('connection', (ws) => {
         }
 
         case 'pause_listening': {
+          const session = sessions.get(currentSessionId);
+          if (session) session.isPaused = Boolean(data.paused);
           broadcastToSession(currentSessionId, { type: 'listening_status', paused: data.paused });
           break;
         }

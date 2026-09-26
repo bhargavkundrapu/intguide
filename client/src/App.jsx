@@ -293,9 +293,15 @@ export default function App() {
         break;
 
       case 'chat_interrupted':
-        activeReqIdRef.current = null;
+        if (!data.reqId || data.reqId === activeReqIdRef.current) {
+          activeReqIdRef.current = null;
+        }
         if (data.msgId) {
-          patchMessage(data.msgId, { status: 'interrupted' });
+          patchMessage(data.msgId, {
+            status: 'interrupted',
+            ...(data.fullText ? { text: data.fullText } : {}),
+            ...(data.totalTime ? { totalTime: data.totalTime } : {})
+          });
         }
         break;
 
