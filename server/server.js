@@ -16,9 +16,9 @@ dotenv.config();
 //  Groq Models Configuration & Dynamic Health Discovery
 // ─────────────────────────────────────────────────────────────
 const DEFAULT_GROQ_MODELS = [
-  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-20b',
   'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b'
+  'qwen/qwen3.8-27b'
 ];
 
 let activeGroqModels = [...DEFAULT_GROQ_MODELS];
@@ -797,7 +797,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
           messages: chatMessages,
           model,
           temperature: 0.25,
-          max_tokens: 1200,
+          max_tokens: 800,
+          reasoning_format: 'hidden',
           stream: true
         }, { signal: abort.signal });
 
@@ -986,7 +987,7 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
       broadcastToSession(sessionId, { type: 'chat_start', msgId: aMsgId, reqId, ttft: Date.now() - startTime, sessionId });
     }
     broadcastToSession(sessionId, { type: 'chat_chunk', msgId: aMsgId, reqId, seqNo: seqNo++, chunk: word, fullText: accumulated, sessionId });
-    await new Promise(r => setTimeout(r, 12));
+    await new Promise(r => setTimeout(r, 2));
   }
 
   if (!(signal?.aborted) && session?.activeReqId === reqId) {
