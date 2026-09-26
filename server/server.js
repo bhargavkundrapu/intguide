@@ -17,8 +17,8 @@ dotenv.config();
 // ─────────────────────────────────────────────────────────────
 const DEFAULT_GROQ_MODELS = [
   'qwen/qwen3.8-27b',
-  'openai/gpt-oss-20b',
-  'openai/gpt-oss-120b'
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b'
 ];
 
 let activeGroqModels = [...DEFAULT_GROQ_MODELS];
@@ -357,12 +357,12 @@ class TranscriptAccumulator {
 function buildContext(session, currentQuestion) {
   const messages = session.messages || [];
 
-  // Collect previous completed exchanges (keep last 2 most recent Q&A pairs for fast context & low TTFT)
+  // Collect previous completed exchanges (up to 4 most recent Q&A pairs)
   // excluding the current question which was just added
   const completedPairs = [];
   const completedQuestions = messages.filter(m => m.role === 'question' && m.status === 'complete');
   const previousQuestions = completedQuestions.filter(q => q.text.trim().toLowerCase() !== currentQuestion.trim().toLowerCase());
-  const recentQuestions = previousQuestions.slice(-2);
+  const recentQuestions = previousQuestions.slice(-4);
 
   for (const q of recentQuestions) {
     const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && m.status === 'complete' && m.text.trim());
@@ -393,8 +393,8 @@ function buildContext(session, currentQuestion) {
       content: `INTERVIEW QUESTION: "${item.question}"`
     });
     // Bounded answer to keep prompt clean while preserving code and key logic
-    const boundedAnswer = item.answer.length > 500
-      ? item.answer.slice(0, 500) + '...'
+    const boundedAnswer = item.answer.length > 1200
+      ? item.answer.slice(0, 1200) + '\n...(truncated for length)'
       : item.answer;
     conversationHistory.push({
       role: 'assistant',
@@ -432,7 +432,9 @@ RECENT CONVERSATION CONTEXT:
 * This interview is an ongoing conversation. When the current question asks for optimization, edge cases, explanation, variations, or refers to "it", "that", "the function", or "the query", DIRECTLY build upon the previous solution above.`;
   }
 
-  return `You are a real-time interview response assistant designed to help candidates answer technical questions with confidence, clarity, and precision.
+  return `You are a real-time interview response copilot.
+PRIMARY OBJECTIVE: Help the candidate sound like an authentic, articulate senior engineer speaking spontaneously in a real interview.
+CRITICAL RISK: If you output long essay paragraphs, the candidate will read them word-for-word, sound robotic and monotone, and get caught by the interviewer.
 
 CANDIDATE PROFILE:
 - Target Role: ${candidate.targetRole}
@@ -444,28 +446,32 @@ CANDIDATE PROFILE:
 - Rules: ${candidate.guardrails}
 ${followUpSection}
 
-ANSWER GENERATION INSTRUCTIONS:
-- CRITICAL - NATURAL SPOKEN CASUAL PHRASING (NO TEXTBOOK OR WIKIPEDIA TONE):
-  * The candidate glances at your response and speaks it aloud in real time. Do NOT write stiff, high-level, academic, or textbook paragraphs.
-  * Avoid formal academic jargon (e.g. avoid phrases like "is defined as", "serves as a mechanism to facilitate", "in accordance with the paradigm").
-  * Use natural, conversational developer speech: write the way an experienced developer naturally talks to a peer on a video call (e.g., "Basically...", "Under the hood...", "The main reason we do this is...", "In practice...").
-  * Format non-coding responses as 2 to 3 quick, glanceable talking points with bold anchor words (e.g., "**Main point:** ...", "**Why:** ...", "**In practice:** ..."). This lets the candidate glance at the screen for two seconds and explain the concept effortlessly in their own words without sounding like they are reading off a script.
+ANSWER GENERATION FORMAT (STRICT TALKING POINTS + PUNCHLINE):
+Every response must follow this high-impact, glanceable structure so the candidate can scan the idea in 2 seconds and speak naturally in their own words:
 
-- CODING / IMPLEMENTATION QUESTIONS:
-  * When the question asks to write code, solve a coding problem, implement a function, or write a query:
-    1. First, provide the complete, clean, working code block immediately.
-    2. Directly below the code block, provide a SHORT CONVERSATIONAL EXPLANATION (2 to 3 short bullet points) tailored specifically to the interviewer's question (e.g., **Approach:** ..., **Key logic:** ..., **Time/Space:** ... in plain spoken words).
-  * The candidate will use these bullets to explain the code aloud to the interviewer naturally. Keep points crisp, direct, and conversational.
+1. **Direct Punchline (1 short conversational sentence)**:
+   - Provide the immediate core answer in simple, natural spoken English.
+   - Example: **Direct Answer:** In PySpark, broadcast joins send the small lookup table to every executor, completely skipping the expensive network shuffle step.
 
-- NON-CODING / CONCEPTUAL QUESTIONS:
-  * Provide the conversational talking points described above.
-  * If code is needed or helpful to explain the concept, provide ONLY a tiny micro-snippet (maximum 2 to 4 lines). Never provide large full implementations or multi-file boilerplate for conceptual questions.
+2. **Talking Points (3 to 4 quick bullet cues)**:
+   - Keep each bullet SHORT (under 12 words) with the primary cue in **bold**.
+   - These are memory triggers for the candidate to speak to, NEVER long prose to read aloud.
+   - Cover: mechanism, practical tradeoff/complexity, and a real-world scenario/edge-case.
+   - Example:
+     * **How it works:** Executor joins small in-memory hash table with partitioned dataset.
+     * **Size threshold:** Ideal when smaller dataset is under ~10MB–100MB.
+     * **Tradeoff:** Dramatically cuts I/O latency, but risks driver OOM if table is too large.
+     * **Production practice:** Avoid when dataset size is unbounded or grows dynamically.
 
-- GENERAL RULES:
-  * Never start with filler phrases like "Certainly!", "Great question!", or "Here is the answer." Start directly with the answer.
-  * Answer every part of a multi-part question concisely.
-  * For follow-up questions, use the earlier conversation and answer the new point directly.
-  * Treat these as writing guidelines, not hard limits that cut off an incomplete answer.
+3. **Code / Query (ONLY when code or SQL is requested)**:
+   - Provide one clean, correct code block in ${effectiveLang}.
+   - Follow with 2 short bullet cues highlighting the key logic and Time/Space complexity.
+
+ANTI-ROBOT & NATURAL SPEECH RULES:
+- NEVER write dense text paragraphs or essays.
+- BANNED ROBOT WORDS: Never use "utilize", "leverage", "delve", "crucial", "testament", "furthermore", "moreover", "in conclusion", "it is worth noting that", "it is imperative". Use plain engineer talk: "use", "helps", "the catch is", "in practice".
+- NO FILLER OR SYCOPHANCY: Never start with "Certainly!", "Great question!", "Sure!", "Here is...", or "Let's dive into...". Start immediately with the Direct Answer.
+- EXPERIENCED CANDIDATE VOICE: Frame points as practical engineering choices and tradeoffs rather than theoretical textbook definitions.
 
 CONVERSATION CONTINUITY & FOLLOW-UPS:
 - You have the recent conversation history between the interviewer and candidate.
@@ -487,14 +493,10 @@ CODING LANGUAGE CONSISTENCY & RULES:
   4. NO RANDOM LANGUAGE SWITCHING: Never switch between Java, C++, Python, JavaScript, etc., from one question to the next. Consistency across the interview is strictly required.
 
 CODING GUIDELINES:
-- Provide the clean, working code block first.
-- Directly follow the code block with 2-3 short, conversational speaking points explaining the logic and how it answers the interviewer's question.
-- Adhere strictly to the language selection hierarchy above.
+- Provide one straightforward, correct solution adhering to the language rules above.
 - Always include the language identifier in the code fence (e.g. \`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql).
-- Write clean, readable, bug-free, idiomatic code with necessary imports and meaningful variable names.
-- Avoid unnecessary classes, helper abstractions, or excessive comments inside the code.
-- Keep lines reasonably short using valid code line breaks.
-- Do NOT automatically generate lengthy "Edge Cases," "Time Complexity," or "Space Complexity" headers unless the interviewer explicitly asked for them.`;
+- Use readable variable names, necessary imports, and a small number of clear steps. Avoid unnecessary classes, helper layers, repeated setup, excessive comments, and clever one-liners that are hard to explain.
+- Keep lines reasonably short by using valid source-code line breaks. Do not alter identifiers, string contents, or logic just to shorten a line.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -743,8 +745,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   let succeeded = false;
   let lastError = null;
 
-  // Pass 1: Try each model with 100ms rate-limit backoff
-  // Pass 2: If rate limited on all models, wait 250ms for quota replenishment and retry
+  // Pass 1: Try each model with 400ms rate-limit backoff
+  // Pass 2: If rate limited on all models, wait 800ms for quota replenishment and retry
   for (let pass = 0; pass < 2 && !succeeded; pass++) {
     for (const model of candidateModels) {
       if (abort.signal.aborted) break;
@@ -753,9 +755,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         const stream = await groq.chat.completions.create({
           messages: chatMessages,
           model,
-          temperature: 0.2,
-          max_tokens: 850,
-          reasoning_effort: 'low',
+          temperature: 0.25,
+          max_tokens: 1200,
           stream: true
         }, { signal: abort.signal });
 
@@ -839,8 +840,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         }
 
         if (status === 429) {
-          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 100ms...`);
-          await new Promise(r => setTimeout(r, 100));
+          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 400ms...`);
+          await new Promise(r => setTimeout(r, 400));
           continue;
         }
 
@@ -856,8 +857,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     if (!succeeded && pass === 0 && !abort.signal.aborted) {
       const isRateLimit = lastError && (lastError.status === 429 || lastError.statusCode === 429);
       if (isRateLimit) {
-        console.warn(`[Groq] Temporary rate limit on all models. Backing off 250ms before retry...`);
-        await new Promise(r => setTimeout(r, 250));
+        console.warn(`[Groq] Temporary rate limit on all models. Backing off 800ms before retry...`);
+        await new Promise(r => setTimeout(r, 800));
       }
     }
   }
@@ -899,25 +900,118 @@ async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, s
 
   if (q.includes('duplicate') || (q.includes('python') && (q.includes('list') || q.includes('array')))) {
     if (q.includes('without') && (q.includes('count') || q.includes('counter') || q.includes('set') || q.includes('predefined'))) {
-      answer = `To find duplicates and their counts without using predefined functions like Counter, count, or set, use a manual hash map (dictionary) in a single pass.\n\n\`\`\`python\ndef find_duplicates(items):\n    counts = {}\n    duplicates = {}\n    \n    # Count frequencies manually\n    for item in items:\n        if item in counts:\n            counts[item] += 1\n        else:\n            counts[item] = 1\n            \n    # Filter items that appear more than once\n    for item, freq in counts.items():\n        if freq > 1:\n            duplicates[item] = freq\n            \n    return duplicates\n\`\`\`\n\nThis operates in O(n) time and O(k) auxiliary space where k is unique values, strictly without Counter or set.`;
+      answer = `**Direct Answer:** Use a single-pass hash map to count frequencies manually without using built-ins like Counter or set.
+
+* **Core logic:** Loop once, increment element count in a dictionary.
+* **Filter step:** Collect items where frequency > 1.
+* **Complexity:** O(N) linear time and O(K) space for distinct keys.
+* **Edge cases:** Empty list or all distinct items returns empty.
+
+\`\`\`python
+def find_duplicates(items):
+    counts = {}
+    duplicates = {}
+    
+    # Count frequencies manually
+    for item in items:
+        if item in counts:
+            counts[item] += 1
+        else:
+            counts[item] = 1
+            
+    # Filter items that appear more than once
+    for item, freq in counts.items():
+        if freq > 1:
+            duplicates[item] = freq
+            
+    return duplicates
+\`\`\``;
     } else {
-      answer = `To find duplicates and their counts in a list, count frequencies with a dictionary and collect elements that appear more than once.\n\n\`\`\`python\ndef find_duplicates(items):\n    counts = {}\n    for item in items:\n        counts[item] = counts.get(item, 0) + 1\n    return {k: v for k, v in counts.items() if v > 1}\n\`\`\`\n\nThis scans the input once in O(n) time and returns each duplicate alongside its frequency.`;
+      answer = `**Direct Answer:** Iterate once with a frequency dictionary and collect keys with a count greater than 1.
+
+* **Core logic:** Use \`dict.get()\` to tally counts in a single pass.
+* **Complexity:** O(N) time and O(N) space.
+* **Practical note:** Fast and avoids extra sorting overhead.
+
+\`\`\`python
+def find_duplicates(items):
+    counts = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    return {k: v for k, v in counts.items() if v > 1}
+\`\`\``;
     }
   } else if (q.includes('sql') || q.includes('salary') || q.includes('dense_rank') || q.includes('second highest')) {
-    answer = `To find the second-highest salary per department while handling ties, use the DENSE_RANK() window function.\n\n\`\`\`sql\nSELECT department, employee_name, salary\nFROM (\n  SELECT department, employee_name, salary,\n         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk\n  FROM employees\n  WHERE salary IS NOT NULL\n) ranked\nWHERE rnk = 2;\n\`\`\`\n\nThe inner query ranks employees by salary within each department without skipping rank numbers when ties occur. The outer query filters for rank 2 to return all second-highest earners cleanly.`;
+    answer = `**Direct Answer:** Use the \`DENSE_RANK()\` window function partitioned by department to handle ties cleanly without skipping rank numbers.
+
+* **Core logic:** Rank salaries descending within each department partition.
+* **Handling ties:** Unlike \`RANK()\`, \`DENSE_RANK()\` ensures the next distinct salary is ranked 2.
+* **Outer filter:** Select rows where rank equals 2.
+
+\`\`\`sql
+SELECT department, employee_name, salary
+FROM (
+  SELECT department, employee_name, salary,
+         DENSE_RANK() OVER (PARTITION BY department ORDER BY salary DESC) AS rnk
+  FROM employees
+  WHERE salary IS NOT NULL
+) ranked
+WHERE rnk = 2;
+\`\`\``;
   } else if (q.includes('spa') || q.includes('single page')) {
-    answer = `A single-page application (SPA) loads the HTML, CSS, and JavaScript assets once, then updates the view dynamically without full page reloads.\n\nAll navigation happens client-side via JavaScript routing and the browser history API, while data is exchanged with backend APIs. This gives the app a responsive desktop feel and minimizes network bandwidth.`;
+    answer = `**Direct Answer:** A Single Page Application loads a single HTML shell and renders UI dynamically via client-side JavaScript without page reloads.
+
+* **Routing:** Managed in the browser via History API (React Router / Vue Router).
+* **Data fetching:** Exchanged asynchronously using JSON REST or GraphQL APIs.
+* **Key advantage:** Feels like a fast, responsive native app.
+* **Tradeoff:** Larger initial bundle download and requires SSR for strict SEO.`;
   } else if (q.includes('databricks') || q.includes('incremental') || q.includes('delta')) {
-    answer = `Incremental data loading in Databricks uses Delta Lake change tracking and checkpointing to process only newly arrived records.\n\n\`\`\`python\n# Read new data using checkpoint offset\nnew_df = spark.read.format("delta").table("source_telemetry") \\\n    .filter("event_timestamp > (SELECT coalesce(max(last_sync), '1970-01-01') FROM sync_checkpoints)")\n\n# Merge incrementally into destination\nfrom delta.tables import DeltaTable\ntarget = DeltaTable.forName(spark, "target_lakehouse")\ntarget.alias("t").merge(\n    new_df.alias("s"),\n    "t.id = s.id"\n).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()\n\`\`\`\n\nThis eliminates full table scans, keeping pipelines fast and cost-effective.`;
+    answer = `**Direct Answer:** Incremental loading in Databricks uses Delta Lake change feeds and offset checkpoints to process only newly arrived records.
+
+* **Core mechanism:** Reads latest committed files from Delta transaction log.
+* **Deduplication:** Uses \`MERGE INTO\` to upsert without full table overwrites.
+* **Advantage:** Eliminates full table scans, reducing pipeline compute and cost.
+
+\`\`\`python
+# Read new data using checkpoint offset
+new_df = spark.read.format("delta").table("source_telemetry") \\
+    .filter("event_timestamp > (SELECT coalesce(max(last_sync), '1970-01-01') FROM sync_checkpoints)")
+
+# Merge incrementally into destination lakehouse
+from delta.tables import DeltaTable
+target = DeltaTable.forName(spark, "target_lakehouse")
+target.alias("t").merge(
+    new_df.alias("s"),
+    "t.id = s.id"
+).whenMatchedUpdateAll().whenNotMatchedInsertAll().execute()
+\`\`\``;
   } else if (q.includes('react') || q.includes('virtual dom') || q.includes('usememo')) {
-    answer = `React's Virtual DOM is a lightweight memory representation of the real DOM. When state changes, React compares the new tree with the old one and updates only the changed DOM elements.\n\n- useMemo caches calculated values across renders\n- useCallback preserves function references to avoid child re-renders\n- Keys help React track which items were added or moved`;
+    answer = `**Direct Answer:** React's Virtual DOM is an in-memory JS representation of the UI that reconciles changes before updating the real DOM.
+
+* **Diffing:** React compares previous and new Virtual DOM trees.
+* **Batching:** Computes the minimal set of real DOM mutations.
+* **useMemo / useCallback:** Skips re-computations and preserves function references across re-renders.
+* **Keys:** Enables React to identify which array items changed or moved.`;
   } else if (q.includes('node') || q.includes('event loop')) {
-    answer = `Node.js runs single-threaded JavaScript using a non-blocking event loop backed by libuv.\n\nIt handles timers, pending I/O, and poll events in distinct phases, draining microtasks after each phase. Long compute jobs should be offloaded to worker threads so the main event loop never blocks.`;
+    answer = `**Direct Answer:** Node.js runs single-threaded JavaScript with a non-blocking event loop powered by libuv for asynchronous I/O.
+
+* **Phases:** Processes timers, pending I/O callbacks, and poll/check queues.
+* **Microtasks:** Promise callbacks and \`process.nextTick\` run immediately after each phase.
+* **Production practice:** Offload CPU-bound calculations to Worker Threads or external queues.`;
   } else if (q.includes('broadcast join') || q.includes('join')) {
-    answer = `A broadcast join copies a small table to all worker nodes so the large table can be joined locally without network shuffling.\n\nUse it when the smaller table fits comfortably in executor memory, typically under 10MB to a few hundred megabytes in Spark. Avoid broadcasting large tables because it can overwhelm driver and executor memory.`;
+    answer = `**Direct Answer:** A broadcast join sends the smaller table to all worker nodes so the join happens locally in memory with zero network shuffling.
+
+* **Mechanism:** Eliminates expensive network shuffle across executors.
+* **Size limit:** Best when small table is under ~10MB–100MB.
+* **Tradeoff:** Dramatically speeds up jobs, but risks driver/executor OOM if table is too large.
+* **Production rule:** Never broadcast tables that grow unbounded.`;
   } else {
     const cleanQ = question.replace(/^(what is|how do|explain|tell me about)\s+/i, '').trim();
-    answer = `For ${cleanQ || 'this technical problem'}, the standard production approach balances efficiency and code clarity.\n\nStart with a straightforward solution using standard library primitives, validate boundary conditions, and ensure clean separation of concerns.`;
+    answer = `**Direct Answer:** For ${cleanQ || 'this question'}, start with standard architectural patterns and explain the concrete engineering tradeoffs.
+
+* **Approach:** Identify the immediate bottleneck or core requirement.
+* **Tradeoffs:** Weigh execution latency against memory and implementation complexity.
+* **Production reality:** Account for edge cases, null validation, and scalability.`;
   }
 
   const fullAnswer = text + answer;
