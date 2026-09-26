@@ -17,8 +17,8 @@ dotenv.config();
 // ─────────────────────────────────────────────────────────────
 const DEFAULT_GROQ_MODELS = [
   'qwen/qwen3.8-27b',
-  'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b'
+  'openai/gpt-oss-20b',
+  'openai/gpt-oss-120b'
 ];
 
 let activeGroqModels = [...DEFAULT_GROQ_MODELS];
@@ -238,15 +238,15 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
-    this.SETTLE_MS = 1800;    // settle after 1.8s of quiet
-    this.WINDOW_MS = 10000;   // 10-second question accumulation window max
+    this.SETTLE_MS = 950;     // fast settle after 950ms of quiet
+    this.WINDOW_MS = 8000;    // 8-second question accumulation window max
   }
 
   _getDynamicSettleMs() {
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
-    // If an answer is currently streaming, allow 2400ms of quiet before settling to protect the active answer
-    return isStreaming ? 2400 : this.SETTLE_MS;
+    // If an answer is currently streaming, allow 1400ms of quiet before settling to protect the active answer
+    return isStreaming ? 1400 : this.SETTLE_MS;
   }
 
   isIncomplete(text) {
@@ -284,7 +284,7 @@ class TranscriptAccumulator {
     if (speechFinal) {
       // If trailing phrase is incomplete (e.g., ends in "for"), keep waiting up to window
       if (this.isIncomplete(this.committed)) {
-        const remaining = Math.max(1200, this.WINDOW_MS - elapsed);
+        const remaining = Math.max(900, this.WINDOW_MS - elapsed);
         this._scheduleSettle(remaining);
         return null;
       }
@@ -357,12 +357,12 @@ class TranscriptAccumulator {
 function buildContext(session, currentQuestion) {
   const messages = session.messages || [];
 
-  // Collect previous completed exchanges (up to 4 most recent Q&A pairs)
+  // Collect previous completed exchanges (keep last 2 most recent Q&A pairs for fast context & low TTFT)
   // excluding the current question which was just added
   const completedPairs = [];
   const completedQuestions = messages.filter(m => m.role === 'question' && m.status === 'complete');
   const previousQuestions = completedQuestions.filter(q => q.text.trim().toLowerCase() !== currentQuestion.trim().toLowerCase());
-  const recentQuestions = previousQuestions.slice(-4);
+  const recentQuestions = previousQuestions.slice(-2);
 
   for (const q of recentQuestions) {
     const a = messages.find(m => m.role === 'answer' && m.parentId === q.id && m.status === 'complete' && m.text.trim());
@@ -393,8 +393,8 @@ function buildContext(session, currentQuestion) {
       content: `INTERVIEW QUESTION: "${item.question}"`
     });
     // Bounded answer to keep prompt clean while preserving code and key logic
-    const boundedAnswer = item.answer.length > 1200
-      ? item.answer.slice(0, 1200) + '\n...(truncated for length)'
+    const boundedAnswer = item.answer.length > 500
+      ? item.answer.slice(0, 500) + '...'
       : item.answer;
     conversationHistory.push({
       role: 'assistant',
@@ -452,9 +452,10 @@ ANSWER GENERATION INSTRUCTIONS:
   * Format non-coding responses as 2 to 3 quick, glanceable talking points with bold anchor words (e.g., "**Main point:** ...", "**Why:** ...", "**In practice:** ..."). This lets the candidate glance at the screen for two seconds and explain the concept effortlessly in their own words without sounding like they are reading off a script.
 
 - CODING / IMPLEMENTATION QUESTIONS:
-  * When the question asks to write code, solve a coding problem, implement a function, or write a query: PROVIDE ONLY THE CODE BLOCK.
-  * Zero introductory text, zero explanation, zero bullet points, and zero trailing commentary.
-  * Output ONLY the markdown code fence with the complete, working solution. The candidate needs the code immediately without scrolling through text.
+  * When the question asks to write code, solve a coding problem, implement a function, or write a query:
+    1. First, provide the complete, clean, working code block immediately.
+    2. Directly below the code block, provide a SHORT CONVERSATIONAL EXPLANATION (2 to 3 short bullet points) tailored specifically to the interviewer's question (e.g., **Approach:** ..., **Key logic:** ..., **Time/Space:** ... in plain spoken words).
+  * The candidate will use these bullets to explain the code aloud to the interviewer naturally. Keep points crisp, direct, and conversational.
 
 - NON-CODING / CONCEPTUAL QUESTIONS:
   * Provide the conversational talking points described above.
@@ -486,13 +487,14 @@ CODING LANGUAGE CONSISTENCY & RULES:
   4. NO RANDOM LANGUAGE SWITCHING: Never switch between Java, C++, Python, JavaScript, etc., from one question to the next. Consistency across the interview is strictly required.
 
 CODING GUIDELINES:
-- CRITICAL: For any question asking to write code, solve an algorithm, or write a query, output ONLY the code block. Zero intro text, zero explanation before or after.
+- Provide the clean, working code block first.
+- Directly follow the code block with 2-3 short, conversational speaking points explaining the logic and how it answers the interviewer's question.
 - Adhere strictly to the language selection hierarchy above.
 - Always include the language identifier in the code fence (e.g. \`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql).
 - Write clean, readable, bug-free, idiomatic code with necessary imports and meaningful variable names.
-- Avoid unnecessary classes, helper abstractions, or excessive comments.
+- Avoid unnecessary classes, helper abstractions, or excessive comments inside the code.
 - Keep lines reasonably short using valid code line breaks.
-- Do NOT automatically generate "Edge Cases," "Time Complexity," or "Space Complexity" sections unless the interviewer explicitly asked for them.`;
+- Do NOT automatically generate lengthy "Edge Cases," "Time Complexity," or "Space Complexity" headers unless the interviewer explicitly asked for them.`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -721,8 +723,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   let succeeded = false;
   let lastError = null;
 
-  // Pass 1: Try each model with 400ms rate-limit backoff
-  // Pass 2: If rate limited on all models, wait 800ms for quota replenishment and retry
+  // Pass 1: Try each model with 100ms rate-limit backoff
+  // Pass 2: If rate limited on all models, wait 250ms for quota replenishment and retry
   for (let pass = 0; pass < 2 && !succeeded; pass++) {
     for (const model of candidateModels) {
       if (abort.signal.aborted) break;
@@ -731,8 +733,9 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         const stream = await groq.chat.completions.create({
           messages: chatMessages,
           model,
-          temperature: 0.25,
-          max_tokens: 1200,
+          temperature: 0.2,
+          max_tokens: 850,
+          reasoning_effort: 'low',
           stream: true
         }, { signal: abort.signal });
 
@@ -816,8 +819,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         }
 
         if (status === 429) {
-          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 400ms...`);
-          await new Promise(r => setTimeout(r, 400));
+          console.warn(`[Groq] Rate limit 429 on model ${model}, trying next model in 100ms...`);
+          await new Promise(r => setTimeout(r, 100));
           continue;
         }
 
@@ -833,8 +836,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     if (!succeeded && pass === 0 && !abort.signal.aborted) {
       const isRateLimit = lastError && (lastError.status === 429 || lastError.statusCode === 429);
       if (isRateLimit) {
-        console.warn(`[Groq] Temporary rate limit on all models. Backing off 800ms before retry...`);
-        await new Promise(r => setTimeout(r, 800));
+        console.warn(`[Groq] Temporary rate limit on all models. Backing off 250ms before retry...`);
+        await new Promise(r => setTimeout(r, 250));
       }
     }
   }
