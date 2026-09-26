@@ -237,18 +237,19 @@ function isPureChatterOrNoise(text) {
   const hasQuestionIntent = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
   const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
   const hasSetup = SETUP_PREMISE_REGEX.test(trimmed);
+  const hasFollowUp = /\b(it|that|this|instead|in-place|without|also|optimize|rewrite|what if|how about|more|detail|example|complexity|another|one more|how to|can we|could we)\b/i.test(trimmed);
 
-  // If the speech has NO question intent, NO technical topic, and is NOT a problem premise, filter it out
-  if (!hasQuestionIntent && !hasTechTopic && !hasSetup) {
-    return true;
+  // If the speech has question intent, technical topic, problem premise, or follow-up keyword, it is a valid question!
+  if (hasQuestionIntent || hasTechTopic || hasSetup || hasFollowUp) {
+    return false;
   }
 
-  // If short and contains conversational chatter phrases without question mark or tech topic
-  if (CHATTER_REGEX.test(trimmed) && !hasTechTopic && !hasQuestionIntent && !trimmed.endsWith('?')) {
-    return true;
+  // If 5 or more words and not matching pure filler noise, treat as valid speech
+  if (trimmed.split(/\s+/).length >= 5) {
+    return false;
   }
 
-  return false;
+  return true;
 }
 
 function sanitizeQuestionText(text) {
@@ -279,17 +280,22 @@ class TranscriptAccumulator {
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
     this.SETTLE_MS = 1400;    // settle default after 1.4s of quiet
-    this.WINDOW_MS = 15000;   // 15-second question accumulation window max
+    this.WINDOW_MS = 20000;   // 20-second question accumulation window max
   }
 
   _getDynamicSettleMs(text) {
+    const full = (this.committed ? this.committed + ' ' + (text || this.interim) : (text || this.interim)).trim();
+    if (isCompleteDirectQuestion(full)) return 900;
+    if (isPremiseOnly(full)) return 1800; // Allow interviewer time to formulate question after setup
+
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
-    if (isStreaming) return 2400;
+    if (isStreaming) {
+      // If interviewer asks an extra question or follow-up during streaming, settle promptly in 1.0s
+      const hasQIntent = full.endsWith('?') || QUESTION_INTENT_REGEX.test(full) || TECH_TOPIC_REGEX.test(full) || /\b(it|that|instead|optimize|rewrite|what if|how about|also)\b/i.test(full);
+      return hasQIntent ? 1000 : 1400;
+    }
 
-    const full = (this.committed ? this.committed + ' ' + (text || this.interim) : (text || this.interim)).trim();
-    if (isPremiseOnly(full)) return 1800; // Allow interviewer time to formulate question after setup
-    if (isCompleteDirectQuestion(full)) return 950; // Fast response for completed questions!
     return this.SETTLE_MS;
   }
 
@@ -557,9 +563,8 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     lastQ.text.trim().split(/\s+/).length < 7
   );
 
-  // Qualifiers and constraints that continue ANY question (even after '?')
-  const QUALIFIER_CONTINUATIONS = /^(without using|using|with time complexity|with space complexity|with o\(|in o\(|in-place|and also|what if|how about|what about)\b/i;
-  const REFERS_TO_PREVIOUS = /\b(it|that|this function|this query|the function|the query|the approach|the previous|optimize that|rewrite that|scale that)\b/i;
+  // Pure inline constraints and language specifiers that complete an open question
+  const PURE_CONSTRAINT = /^(without using|using|with time complexity|with space complexity|with o\(|in o\(|in-place)\b/i;
   const LANGUAGE_SPECIFIER = /^(in python|in sql|in typescript|in javascript|in java|in c\+\+|in golang|in rust|in pyspark|in react)\b/i;
 
   let isContinuation = false;
@@ -568,8 +573,10 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
       // If previous question was an incomplete premise or clause, any question action or qualifier completes it!
       isContinuation = true;
     } else {
-      // If previous question was already a complete question with '?', only merge if it's an explicit constraint/qualifier or refers to previous logic
-      isContinuation = QUALIFIER_CONTINUATIONS.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed) || REFERS_TO_PREVIOUS.test(trimmed);
+      // If previous question was already a complete question, only merge if it's a pure inline constraint or language specifier.
+      // Standalone extra questions (with question intent or '?') commit as their own question cards!
+      const isStandaloneQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
+      isContinuation = !isStandaloneQuestion && (PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed));
     }
   }
 
@@ -585,7 +592,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
 
     // Connect text cleanly
     const prevText = lastQ.text.trim();
-    const isExplicitQualifier = QUALIFIER_CONTINUATIONS.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
+    const isExplicitQualifier = PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
     const needsSeparator = !prevText.endsWith('.') && !prevText.endsWith('?') && !prevText.endsWith(',') && !isExplicitQualifier && !lastWasIncomplete;
     lastQ.text = `${prevText}${needsSeparator ? ',' : ''} ${trimmed}`;
     lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : prevText} ${rawText}`;
@@ -608,25 +615,22 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     return;
   }
 
-  // Auto-expire answers stuck in 'streaming' older than 12s to prevent stream lock
+  // Auto-expire answers stuck in 'streaming' older than 20s to prevent stream lock
   const now = Date.now();
   for (const m of session.messages) {
-    if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 12000) {
+    if (m.role === 'answer' && m.status === 'streaming' && (now - (m.createdAt || 0)) > 20000) {
       m.status = 'complete';
       console.log(`[Server] Auto-expired stale streaming answer ${m.id}`);
     }
   }
 
   // Shield active answer from premature interruptions:
-  // If an answer is currently streaming, don't let casual remarks or small chatter kill it!
+  // Only discard pure background chatter/noise while an answer is generating.
+  // Any real question, follow-up, or extra question is allowed through immediately!
   const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
   if (isCurrentlyStreaming && !isManual) {
-    const isExplicitQuestion = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
-    const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
-
-    // If it lacks clear question intent or is under 5 words without technical terms, ignore it to protect the streaming answer!
-    if (!isExplicitQuestion && !hasTechTopic) {
-      console.log(`[Streaming Shield] Ignored speech "${trimmed}" while answer is streaming to protect active generation.`);
+    if (isPureChatterOrNoise(trimmed)) {
+      console.log(`[Streaming Shield] Ignored background chatter/noise "${trimmed}" while answer is streaming.`);
       return;
     }
   }
@@ -676,6 +680,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
       broadcastToSession(sessionId, {
         type: hasSubstantialText ? 'chat_done' : 'chat_interrupted',
         msgId: inProgress.id,
+        reqId: inProgress.reqId,
         fullText: inProgress.text,
         totalTime: inProgress.totalTime,
         sessionId
@@ -683,6 +688,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     }
   }
 
+  session.pendingQuestionHash = null;
   streamAiAnswer(sessionId, trimmed, qMsgId, session);
 }
 
@@ -1172,13 +1178,10 @@ wss.on('connection', (ws) => {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
             if (full && !acc.isIncomplete(full) && !acc.isPremiseOnly(full)) {
-              // If an answer is currently streaming, don't commit silence events for casual chatter
+              // If an answer is currently streaming, only ignore pure isolated chatter/filler
               const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
-              if (isCurrentlyStreaming) {
-                const isExplicitQ = full.endsWith('?') || QUESTION_INTENT_REGEX.test(full);
-                if (!isExplicitQ && full.split(/\s+/).length < 6) {
-                  return; // Don't interrupt streaming answer on quiet pauses/chatter
-                }
+              if (isCurrentlyStreaming && isPureChatterOrNoise(full)) {
+                return; // Don't interrupt streaming answer on quiet pauses/pure filler
               }
               session.lastFinalTranscript = null;
               const words = acc.consumeWords();
