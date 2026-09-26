@@ -45,7 +45,6 @@ export default function App() {
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const [activeNav, setActiveNav] = useState('dashboard');
   const [wsError, setWsError] = useState(null);
-  const [deepgramActive, setDeepgramActive] = useState(false);
 
   const wsRef = useRef(null);
 
@@ -177,10 +176,6 @@ export default function App() {
       case 'peer_status':
         setMobileConnected(data.mobileConnected);
         setMobileCount(data.mobileCount || 0);
-        break;
-
-      case 'deepgram_status':
-        setDeepgramActive(data.status === 'connected');
         break;
 
       // ── Transcript events ──
@@ -538,7 +533,6 @@ export default function App() {
                 setIsListening={setIsListening}
                 onAudioChunk={handleAudioChunk}
                 onTranscriptUpdate={handleTranscriptUpdate}
-                deepgramActive={deepgramActive}
               />
 
               {/* Transcript / Question input card */}
