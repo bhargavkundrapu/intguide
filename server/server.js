@@ -546,6 +546,7 @@ function isPureChatterOrNoise(text) {
   const trimmed = (text || '').trim();
   if (!trimmed) return true;
   if (PURE_NOISE_OR_FILLER.test(trimmed)) return true;
+  if (CHATTER_REGEX.test(trimmed) && trimmed.split(/\s+/).length <= 4) return true;
 
   const hasQuestionIntent = trimmed.endsWith('?') || QUESTION_INTENT_REGEX.test(trimmed);
   const hasTechTopic = TECH_TOPIC_REGEX.test(trimmed);
@@ -557,8 +558,8 @@ function isPureChatterOrNoise(text) {
     return false;
   }
 
-  // If 5 or more words and not matching pure filler noise, treat as valid speech
-  if (trimmed.split(/\s+/).length >= 5) {
+  // If 3 or more words and not matching pure filler noise, treat as valid interview speech
+  if (trimmed.split(/\s+/).length >= 3) {
     return false;
   }
 
@@ -599,22 +600,28 @@ class TranscriptAccumulator {
     this.words = [];          // collected word objects with confidence scores
     this.settleTimer = null;
     this.speechStartTime = null; // tracks when speech for current question began
+    this.lastTextChangeTime = null; // tracks when text last changed to avoid infinite interim reset
     this.SETTLE_MS = 1400;    // settle default after 1.4s of quiet
-    this.WINDOW_MS = 20000;   // 20-second question accumulation window max
+    this.WINDOW_MS = 2400;    // max 2.4s wait for incomplete sentences before committing
   }
 
   _getDynamicSettleMs(text) {
     const full = (this.committed ? this.committed + ' ' + (text || this.interim) : (text || this.interim)).trim();
-    if (full.endsWith('?') && isCompleteDirectQuestion(full)) return 800; // Punctuation question mark
-    if (isPremiseOnly(full)) return 2000; // Allow interviewer time to formulate question after setup
-    if (isIncomplete(full)) return 2000;
+    const wordCount = full.split(/\s+/).length;
+
+    // For short questions (< 10 words, e.g. "How does this work?"), allow 1300ms so multi-part questions don't split prematurely
+    if (full.endsWith('?') && isCompleteDirectQuestion(full)) {
+      return wordCount < 10 ? 1300 : 850;
+    }
+    if (isPremiseOnly(full)) return 1800;
+    if (isIncomplete(full)) return 1800;
 
     const session = sessions.get(this.sessionId);
     const isStreaming = session?.messages?.some(m => m.role === 'answer' && m.status === 'streaming');
     if (isStreaming) {
-      // If interviewer asks an extra question or follow-up during streaming, settle promptly in 1.0s
+      // If interviewer asks an extra question or follow-up during streaming, settle promptly
       const hasQIntent = full.endsWith('?') || QUESTION_INTENT_REGEX.test(full) || TECH_TOPIC_REGEX.test(full) || /\b(it|that|instead|optimize|rewrite|what if|how about|also)\b/i.test(full);
-      return hasQIntent ? 1000 : 1400;
+      return hasQIntent ? 950 : 1300;
     }
 
     return this.SETTLE_MS;
@@ -633,9 +640,17 @@ class TranscriptAccumulator {
   }
 
   addInterim(text) {
+    const clean = (text || '').trim();
     if (!this.speechStartTime) this.speechStartTime = Date.now();
-    this.interim = text;
-    this._scheduleSettle(this._getDynamicSettleMs(text));
+
+    // Only reschedule timer if text actually changed or settleTimer is not currently set
+    if (clean && clean !== this.interim) {
+      this.lastTextChangeTime = Date.now();
+      this.interim = clean;
+      this._scheduleSettle(this._getDynamicSettleMs(clean));
+    } else if (!this.settleTimer) {
+      this._scheduleSettle(this._getDynamicSettleMs(this.interim));
+    }
   }
 
   addFinal(text, speechFinal, words = []) {
@@ -646,6 +661,7 @@ class TranscriptAccumulator {
     if (!this.committed && PURE_NOISE_OR_FILLER.test(cleanChunk)) return null;
 
     if (!this.speechStartTime) this.speechStartTime = Date.now();
+    this.lastTextChangeTime = Date.now();
 
     if (Array.isArray(words) && words.length > 0) {
       this.words.push(...words);
@@ -656,23 +672,22 @@ class TranscriptAccumulator {
     this.committed = cleanTranscriptDuplicates(merged);
     this.interim = '';
 
-    const elapsed = Date.now() - this.speechStartTime;
+    const wordCount = this.committed.split(/\s+/).length;
 
     if (speechFinal) {
-      // If trailing phrase is incomplete or premise setup, keep waiting
+      // If trailing phrase is incomplete or premise setup, give a brief 1.8s formulation window
       if (this.isIncomplete(this.committed) || this.isPremiseOnly(this.committed)) {
-        const remaining = Math.max(1400, Math.min(2500, this.WINDOW_MS - elapsed));
-        this._scheduleSettle(remaining);
+        this._scheduleSettle(1800);
         return null;
       }
 
-      // If question ends with an explicit question mark '?', settle fast (750ms)
+      // If short question (< 10 words), allow 1300ms so combined questions are captured together
       if (this.committed.endsWith('?') && isCompleteDirectQuestion(this.committed)) {
-        this._scheduleSettle(750);
+        this._scheduleSettle(wordCount < 10 ? 1300 : 850);
         return null;
       }
 
-      // Allow 1200ms-1400ms settle so multi-part questions accumulate together without premature cutoff
+      // Allow settle so multi-part questions accumulate together without premature cutoff
       this._scheduleSettle(this._getDynamicSettleMs());
       return null;
     } else {
@@ -698,6 +713,7 @@ class TranscriptAccumulator {
     this.committed = '';
     this.interim = '';
     this.speechStartTime = null;
+    this.lastTextChangeTime = null;
     if (!full || this.isNoiseOnly(full)) return null;
     return full;
   }
@@ -707,10 +723,11 @@ class TranscriptAccumulator {
     this.settleTimer = setTimeout(() => {
       const full = (this.committed ? this.committed + ' ' + this.interim : this.interim).trim();
 
+      // Only wait if speech literally just began (< 2.2s ago); never stall for 20 seconds!
       if (this.isIncomplete(full) || this.isPremiseOnly(full)) {
         const elapsed = this.speechStartTime ? Date.now() - this.speechStartTime : 0;
-        if (elapsed < this.WINDOW_MS) {
-          this._scheduleSettle(1000);
+        if (elapsed < 2200) {
+          this._scheduleSettle(750);
           return;
         }
       }
@@ -719,6 +736,7 @@ class TranscriptAccumulator {
       this.committed = '';
       this.interim = '';
       this.speechStartTime = null;
+      this.lastTextChangeTime = null;
 
       if (full && !this.isNoiseOnly(full)) {
         const session = sessions.get(this.sessionId);
@@ -959,7 +977,7 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const analysis = analyzeWordUncertainty(words, technicalVocabulary);
   const wordCount = trimmed.split(/\s+/).length;
 
-  // ── Stitching Rule (merges multi-part questions, constraints, and follow-up continuations within 7.5s) ──
+  // ── Stitching Rule (merges multi-part questions, constraints, and follow-up continuations within 8.5s) ──
   const lastQ = [...session.messages].reverse().find(m => m.role === 'question');
   const timeSinceLastQ = lastQ ? Date.now() - lastQ.createdAt : Infinity;
 
@@ -975,7 +993,9 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
   const LANGUAGE_SPECIFIER = /^(in python|in sql|in typescript|in javascript|in java|in c\+\+|in golang|in rust|in pyspark|in react)\b/i;
 
   let isContinuation = false;
-  if (lastQ && timeSinceLastQ < 10000) {
+  let isCombinedQuestion = false;
+
+  if (lastQ && timeSinceLastQ < 9000) {
     const prevClean = lastQ.text.trim().toLowerCase();
     const currClean = trimmed.toLowerCase();
 
@@ -986,8 +1006,18 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     // 2. Fragment continuation: starts with orphaned conjunction, qualifier, or topic continuation
     const isFragment = ORPHANED_CONTINUATION_REGEX.test(trimmed) || PURE_CONSTRAINT.test(trimmed) || LANGUAGE_SPECIFIER.test(trimmed);
 
-    if (isSubsumed || lastWasIncomplete || isFragment) {
+    // 3. Combined question / rapid follow-up in the same turn:
+    // If the interviewer asks another question/aspect within 8.5 seconds (e.g. "How does this work? How do arrow functions differ?"),
+    // stitch them into a single comprehensive prompt so the candidate sees both answered together without scrolling!
+    const isRapidFollowUp = timeSinceLastQ < 8500 && (
+      lastQ.text.split(/\s+/).length < 12 ||
+      session.messages.some(m => m.role === 'answer' && m.parentId === lastQ.id && m.status === 'streaming') ||
+      /^(how|what|why|and|or|plus|also|can you|could you|does|tell me|explain)\b/i.test(trimmed)
+    );
+
+    if (isSubsumed || lastWasIncomplete || isFragment || isRapidFollowUp) {
       isContinuation = true;
+      if (isRapidFollowUp && !isSubsumed) isCombinedQuestion = true;
     }
   }
 
@@ -1001,13 +1031,22 @@ function commitQuestion(sessionId, questionText, session, words = [], rawTranscr
     // Clean up previous answer completely so no broken or duplicate message is displayed
     session.messages = session.messages.filter(m => !(m.role === 'answer' && m.parentId === lastQ.id));
 
-    // Connect text cleanly with overlap detection and duplicate cleaning
-    const merged = mergeWithOverlap(lastQ.text.trim(), trimmed);
+    // Connect text cleanly: if two distinct questions asked combinely, format cleanly with punctuation
+    let merged;
+    if (isCombinedQuestion) {
+      const prevFormatted = lastQ.text.trim().replace(/[.?]*$/, '?');
+      merged = `${prevFormatted} ${trimmed}`;
+    } else {
+      merged = mergeWithOverlap(lastQ.text.trim(), trimmed);
+    }
+
     lastQ.text = cleanTranscriptDuplicates(merged);
     lastQ.rawText = `${lastQ.rawText ? lastQ.rawText.trim() : lastQ.text} ${rawText}`;
     lastQ.uncertainWords = analysis.uncertainWords;
     lastQ.createdAt = Date.now();
     session.pendingQuestionHash = hashText(lastQ.text);
+
+    console.log(`[Combined Turn] Stitched into unified question: "${lastQ.text}"`);
 
     // Broadcast updated question so UI updates single bubble
     broadcastToSession(sessionId, {
@@ -1756,11 +1795,11 @@ wss.on('connection', (ws) => {
             }
           }
 
-          // VAD silence event — only commit if sentence is grammatically complete AND not just a setup premise!
+          // VAD silence event — Deepgram detected natural pause in speaker utterance
           if (type === 'UtteranceEnd') {
             const acc = session.transcriptAccumulator;
             const full = (acc.committed ? acc.committed + ' ' + acc.interim : acc.interim).trim();
-            if (full && !acc.isIncomplete(full) && !acc.isPremiseOnly(full)) {
+            if (full && full.split(/\s+/).length >= 2 && !acc.isNoiseOnly(full)) {
               // If an answer is currently streaming, only ignore pure isolated chatter/filler
               const isCurrentlyStreaming = [...session.messages].some(m => m.role === 'answer' && m.status === 'streaming');
               if (isCurrentlyStreaming && isPureChatterOrNoise(full)) {

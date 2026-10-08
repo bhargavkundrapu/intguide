@@ -51,7 +51,7 @@ function QuestionBubble({ msg, onEditQuestion }) {
   };
 
   return (
-    <div className="chat-msg chat-msg-question">
+    <div id={`msg-${msg.id}`} className="chat-msg chat-msg-question">
       <div className="chat-msg-header">
         <div className="chat-role-label">
           <User size={12} />
@@ -162,7 +162,7 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
 
   // Answer message
   return (
-    <div className="chat-msg chat-msg-answer">
+    <div id={`msg-${msg.id}`} className="chat-msg chat-msg-answer">
       <div className="chat-msg-header">
         <div className="chat-role-label">
           <Sparkles size={12} />
@@ -270,6 +270,10 @@ export default function ChatHistory({ messages, onContinue, onExplainMore, onEdi
   const [hasNewMsg, setHasNewMsg] = useState(false);
   const prevMsgCount = useRef(0);
 
+  const questions = messages.filter(m => m.role === 'question');
+  const latestQuestion = questions[questions.length - 1];
+  const previousQuestion = questions.length > 1 ? questions[questions.length - 2] : null;
+
   // Track scroll position
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
@@ -280,10 +284,22 @@ export default function ChatHistory({ messages, onContinue, onExplainMore, onEdi
     if (atBottom) setHasNewMsg(false);
   }, []);
 
-  // Auto-scroll only when already at bottom
+  // Smart scroll: when a new question is added, scroll it to top so candidate can read without scrolling up
   useEffect(() => {
     if (messages.length !== prevMsgCount.current) {
+      const isNewQuestionAdded = messages.length > prevMsgCount.current && messages[messages.length - 1].role === 'question';
       prevMsgCount.current = messages.length;
+
+      if (isNewQuestionAdded) {
+        const newQ = messages[messages.length - 1];
+        const el = document.getElementById(`msg-${newQ.id}`);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          setIsAtBottom(true);
+          return;
+        }
+      }
+
       if (isAtBottom) {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       } else {
@@ -292,11 +308,17 @@ export default function ChatHistory({ messages, onContinue, onExplainMore, onEdi
     }
   }, [messages.length, isAtBottom]);
 
-
   const scrollToBottom = () => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     setHasNewMsg(false);
     setIsAtBottom(true);
+  };
+
+  const jumpToQuestion = (qId) => {
+    const el = document.getElementById(`msg-${qId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
 
   if (messages.length === 0) {
@@ -315,6 +337,47 @@ export default function ChatHistory({ messages, onContinue, onExplainMore, onEdi
 
   return (
     <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Floating Quick-Nav for multi-turn questions */}
+      {questions.length > 1 && (
+        <div style={{
+          position: 'absolute',
+          top: 10,
+          right: 18,
+          zIndex: 10,
+          display: 'flex',
+          gap: 6,
+          background: 'rgba(255, 255, 255, 0.94)',
+          backdropFilter: 'blur(8px)',
+          padding: '3px 8px',
+          borderRadius: 20,
+          boxShadow: '0 2px 10px rgba(0,0,0,0.08)',
+          border: '1px solid var(--gray-200)',
+          alignItems: 'center'
+        }}>
+          {previousQuestion && (
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: '2px 8px', height: 24, display: 'flex', alignItems: 'center', gap: 4, color: 'var(--blue-600)' }}
+              onClick={() => jumpToQuestion(previousQuestion.id)}
+              title="Quickly view previous question and answer"
+            >
+              ↑ Prev Q
+            </button>
+          )}
+          <span style={{ fontSize: 10, color: 'var(--gray-300)' }}>•</span>
+          {latestQuestion && (
+            <button
+              className="btn btn-primary"
+              style={{ fontSize: 11, padding: '2px 8px', height: 24, display: 'flex', alignItems: 'center', gap: 4 }}
+              onClick={() => jumpToQuestion(latestQuestion.id)}
+              title="Jump to latest question and answer"
+            >
+              ↓ Latest Q
+            </button>
+          )}
+        </div>
+      )}
+
       <div
         className="chat-history"
         ref={containerRef}
