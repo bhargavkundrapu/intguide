@@ -13,6 +13,18 @@ const GUARDRAIL_PRESETS = [
   { label: '+ Production Metrics', text: 'Emphasize real-world production metrics, latency budgets, and memory efficiency.' }
 ];
 
+const STANDARD_LANGUAGES = [
+  'Python',
+  'SQL',
+  'PySpark',
+  'JavaScript / TypeScript',
+  'Java',
+  'C++',
+  'Go',
+  'Rust',
+  'C#'
+];
+
 export default function ContextDrawer({ isOpen, onClose, context, onSaveContext }) {
   const [form, setForm] = useState({
     resume: '',
@@ -20,7 +32,8 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
     jobDescription: '',
     projects: '',
     guardrails: '',
-    preferredLanguage: 'Python'
+    preferredLanguage: 'Python',
+    resumeFileName: ''
   });
   const [pdfKnowledge, setPdfKnowledge] = useState(null);
   const [pdfUploading, setPdfUploading] = useState(false);
@@ -31,12 +44,17 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
   const [pasteMode, setPasteMode] = useState(false);
   const [pastedText, setPastedText] = useState('');
 
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [resumeError, setResumeError] = useState('');
+  const [resumeSuccess, setResumeSuccess] = useState('');
+
   const [vocabulary, setVocabulary] = useState([]);
   const [newTerm, setNewTerm] = useState('');
   const [saved, setSaved] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
 
   const fileInputRef = useRef(null);
+  const resumeFileInputRef = useRef(null);
 
   useEffect(() => {
     if (context) {
@@ -46,7 +64,8 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
         jobDescription: context.jobDescription || '',
         projects: context.projects || '',
         guardrails: context.guardrails || '',
-        preferredLanguage: context.preferredLanguage || 'Python'
+        preferredLanguage: context.preferredLanguage || 'Python',
+        resumeFileName: context.resumeFileName || ''
       });
       if (context.pdfKnowledge) {
         setPdfKnowledge(context.pdfKnowledge);
@@ -66,7 +85,17 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
       fetch('/api/context')
         .then(r => r.json())
         .then(data => {
-          if (data.pdfKnowledge) setPdfKnowledge(data.pdfKnowledge);
+          const ctx = data.context || data;
+          if (ctx.pdfKnowledge) setPdfKnowledge(ctx.pdfKnowledge);
+          if (ctx.resumeFileName) {
+            setForm(p => ({
+              ...p,
+              resumeFileName: ctx.resumeFileName || p.resumeFileName,
+              resume: p.resume || ctx.resume || '',
+              targetRole: p.targetRole || ctx.targetRole || '',
+              projects: p.projects || ctx.projects || ''
+            }));
+          }
         })
         .catch(() => {});
     }
@@ -172,6 +201,58 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
     } catch (err) {}
   };
 
+  const handleResumeUpload = (file) => {
+    if (!file) return;
+    setResumeUploading(true);
+    setResumeError('');
+    setResumeSuccess('');
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = reader.result;
+        const res = await fetch('/api/context/upload-resume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            fileName: file.name,
+            fileBase64: base64
+          })
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || 'Failed to process résumé file.');
+        }
+
+        const parsed = data.parsed || {};
+        setForm(p => ({
+          ...p,
+          resumeFileName: data.fileName || file.name,
+          resume: parsed.summary || p.resume,
+          targetRole: parsed.targetRole || p.targetRole,
+          projects: parsed.projects || p.projects
+        }));
+
+        setResumeSuccess(`Parsed "${data.fileName}"! Auto-filled profile details & boosted ${parsed.skills?.length || 0} skills.`);
+
+        // Refresh technical vocabulary
+        fetch('/api/vocabulary')
+          .then(r => r.json())
+          .then(d => { if (d.terms) setVocabulary(d.terms); })
+          .catch(() => {});
+      } catch (err) {
+        setResumeError(err.message || 'Error uploading résumé.');
+      } finally {
+        setResumeUploading(false);
+      }
+    };
+    reader.onerror = () => {
+      setResumeError('Failed to read the selected file.');
+      setResumeUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
   const appendGuardrailPreset = (presetText) => {
     setForm(p => ({
       ...p,
@@ -250,11 +331,28 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
           </div>
 
           <div className="form-group">
-            <label className="form-label">Preferred Coding Language</label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label className="form-label" style={{ margin: 0 }}>Preferred Coding Language</label>
+              {!STANDARD_LANGUAGES.includes(form.preferredLanguage) && form.preferredLanguage && (
+                <span className="badge badge-purple" style={{ fontSize: 10 }}>
+                  Custom: {form.preferredLanguage}
+                </span>
+              )}
+            </div>
             <select
               className="form-input"
-              value={form.preferredLanguage || 'Python'}
-              onChange={e => setForm(p => ({ ...p, preferredLanguage: e.target.value }))}
+              value={STANDARD_LANGUAGES.includes(form.preferredLanguage) ? form.preferredLanguage : 'Other'}
+              onChange={e => {
+                const val = e.target.value;
+                if (val === 'Other') {
+                  setForm(p => ({
+                    ...p,
+                    preferredLanguage: STANDARD_LANGUAGES.includes(p.preferredLanguage) ? '' : p.preferredLanguage
+                  }));
+                } else {
+                  setForm(p => ({ ...p, preferredLanguage: val }));
+                }
+              }}
             >
               <option value="Python">Python (Default for Algorithms & General Coding)</option>
               <option value="SQL">SQL (Databases & Relational Queries)</option>
@@ -262,7 +360,27 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
               <option value="JavaScript / TypeScript">JavaScript / TypeScript (Full Stack & Web)</option>
               <option value="Java">Java</option>
               <option value="C++">C++</option>
+              <option value="Go">Go / Golang</option>
+              <option value="Rust">Rust</option>
+              <option value="C#">C# / .NET</option>
+              <option value="Other">Other (Custom language)...</option>
             </select>
+
+            {(!STANDARD_LANGUAGES.includes(form.preferredLanguage) || form.preferredLanguage === '') && (
+              <div style={{ marginTop: 8 }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Enter customized coding language (e.g. Ruby, Kotlin, Swift, Scala, PHP, Dart)..."
+                  value={form.preferredLanguage}
+                  onChange={e => setForm(p => ({ ...p, preferredLanguage: e.target.value }))}
+                  autoFocus
+                />
+                <span style={{ fontSize: 10, color: 'var(--gray-500)', marginTop: 3, display: 'block' }}>
+                  AI will generate all code and solutions using this custom language.
+                </span>
+              </div>
+            )}
           </div>
 
           {/* ══════════════════════════════════════════════
@@ -520,6 +638,130 @@ export default function ContextDrawer({ isOpen, onClose, context, onSaveContext 
               onChange={e => setForm(p => ({ ...p, guardrails: e.target.value }))}
               style={{ background: '#ffffff', borderColor: '#d8b4fe' }}
             />
+          </div>
+
+          {/* ══════════════════════════════════════════════
+              RÉSUMÉ UPLOAD & CANDIDATE DETAILS
+          ══════════════════════════════════════════════ */}
+          <div className="form-group" style={{
+            background: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            borderRadius: 10,
+            padding: 14
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6, margin: 0, color: '#166534' }}>
+                <FileText size={14} style={{ color: '#16a34a' }} />
+                Candidate Résumé (Auto-Profile)
+              </label>
+              {form.resumeFileName && (
+                <span className="badge badge-emerald" style={{ fontSize: 10 }}>
+                  Active ✓
+                </span>
+              )}
+            </div>
+
+            <p style={{ fontSize: 11, color: '#166534', margin: '0 0 10px 0', lineHeight: 1.45 }}>
+              Upload your résumé (.pdf, .txt). The AI automatically extracts your <strong>Target Role</strong>, <strong>Core Skills</strong>, <strong>Summary</strong>, and <strong>Projects</strong> so it knows your real details during the interview.
+            </p>
+
+            {/* Hidden Résumé File Input */}
+            <input
+              type="file"
+              ref={resumeFileInputRef}
+              accept=".pdf,.txt,.md"
+              style={{ display: 'none' }}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) handleResumeUpload(f);
+                e.target.value = '';
+              }}
+            />
+
+            {form.resumeFileName ? (
+              <div style={{
+                background: '#ffffff',
+                border: '1px solid #86efac',
+                borderRadius: 8,
+                padding: '8px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  <div style={{
+                    width: 28, height: 28, borderRadius: 6, background: '#dcfce7',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16a34a', flexShrink: 0
+                  }}>
+                    <FileText size={16} />
+                  </div>
+                  <div style={{ minWidth: 0, overflow: 'hidden' }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-800)', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                      {form.resumeFileName}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#16a34a' }}>
+                      Profile details parsed & active
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 4, flexShrink: 0, marginLeft: 8 }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11, padding: '3px 8px' }}
+                    onClick={() => resumeFileInputRef.current?.click()}
+                    disabled={resumeUploading}
+                  >
+                    Replace
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    style={{ fontSize: 11, padding: '3px 6px', color: '#dc2626' }}
+                    title="Remove résumé"
+                    onClick={() => {
+                      setForm(p => ({ ...p, resumeFileName: '' }));
+                      setResumeSuccess('');
+                    }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                className="pdf-upload-dropzone"
+                style={{ borderColor: '#86efac', background: '#f8fafc' }}
+                onClick={() => resumeFileInputRef.current?.click()}
+              >
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8, background: '#dcfce7',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16a34a'
+                }}>
+                  {resumeUploading ? <RefreshCw className="spinner" size={16} /> : <Upload size={16} />}
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-800)' }}>
+                    {resumeUploading ? 'Extracting Résumé Details...' : 'Upload Résumé (.pdf, .txt)'}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--gray-500)', marginTop: 2 }}>
+                    Auto-fills background, role, skills & projects
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Error / Success Notifications */}
+            {resumeError && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#dc2626', fontSize: 11, marginTop: 6 }}>
+                <AlertCircle size={12} /> {resumeError}
+              </div>
+            )}
+            {resumeSuccess && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#16a34a', fontSize: 11, marginTop: 6 }}>
+                <Check size={12} /> {resumeSuccess}
+              </div>
+            )}
           </div>
 
           {/* Résumé & Job Description */}

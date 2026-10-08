@@ -82,6 +82,9 @@ const candidateContext = {
   guardrails: "Use only verified candidate facts. For missing experience, give industry best-practice answer and note candidate familiarity. Never invent metrics, employers, or results.",
   language: "English",
   preferredLanguage: "Python",
+  resumeFileName: null,
+  resumeExtractedAt: null,
+  skills: ['React', 'Node.js', 'TypeScript', 'PostgreSQL', 'PySpark', 'Databricks', 'Delta Lake', 'WebSockets'],
   pdfKnowledge: {
     fileName: null,
     fileSize: 0,
@@ -194,50 +197,116 @@ function tokenizeQa(text) {
 }
 
 // Search candidate's PDF knowledge base for matching interview question
+// Precision matching: Requires genuine question similarity to prevent unrelated questions from matching
 function findBestQaMatch(question, qaPairs = [], fullText = '') {
   if (!Array.isArray(qaPairs) || qaPairs.length === 0) return null;
   const qTokens = tokenizeQa(question);
   if (qTokens.length === 0) return null;
 
+  const qTokenSet = new Set(qTokens);
   let best = null;
   let bestScore = 0;
 
   for (const pair of qaPairs) {
     const pairQTokens = tokenizeQa(pair.question);
-    const pairATokens = tokenizeQa(pair.answer);
+    if (pairQTokens.length === 0) continue;
 
-    // Question token overlap (heavy weight)
-    let qMatches = 0;
-    for (const qt of qTokens) {
-      if (pairQTokens.some(pt => pt === qt || pt.includes(qt) || qt.includes(pt))) {
-        qMatches++;
+    // Strict exact token match between interview question and PDF question
+    let matches = 0;
+    for (const pt of pairQTokens) {
+      if (qTokenSet.has(pt)) {
+        matches++;
       }
     }
 
-    // Answer token overlap (supporting weight)
-    let aMatches = 0;
-    for (const qt of qTokens) {
-      if (pairATokens.some(at => at === qt || at.includes(qt) || qt.includes(at))) {
-        aMatches++;
-      }
-    }
+    if (matches === 0) continue;
 
-    const qScore = qTokens.length > 0 ? (qMatches / qTokens.length) : 0;
-    const aScore = qTokens.length > 0 ? (aMatches / qTokens.length) : 0;
-    const combinedScore = (qScore * 0.75) + (aScore * 0.25);
+    // Jaccard similarity between question token sets
+    const totalUnique = new Set([...qTokens, ...pairQTokens]).size;
+    const jaccard = totalUnique > 0 ? (matches / totalUnique) : 0;
+    const overlapWithTarget = matches / pairQTokens.length;
 
-    if (combinedScore > bestScore) {
-      bestScore = combinedScore;
-      best = { ...pair, score: combinedScore, qMatches, totalQTokens: qTokens.length };
+    // Both metrics must show strong relevance:
+    const score = (jaccard * 0.6) + (overlapWithTarget * 0.4);
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = { ...pair, score, matches, totalTarget: pairQTokens.length };
     }
   }
 
-  // Threshold: at least 28% keyword relevance
-  if (bestScore >= 0.28 && best) {
+  // High confidence threshold: requires genuine subject relevance
+  // At least 38% match score AND at least 2 key subject matches (or 1 if the PDF question was short)
+  if (best && bestScore >= 0.38 && (best.matches >= 2 || best.totalTarget <= 2)) {
     return { match: best, score: bestScore, isOutOfPdf: false };
   }
 
   return { match: null, score: bestScore, isOutOfPdf: true };
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Résumé Parser & Detail Extractor Engine
+// ─────────────────────────────────────────────────────────────
+const RESUME_TECH_CATALOG = [
+  'Python', 'JavaScript', 'TypeScript', 'Java', 'C++', 'C#', 'Go', 'Golang', 'Rust', 'SQL',
+  'PySpark', 'Databricks', 'Delta Lake', 'React', 'Node.js', 'Next.js', 'Vue', 'Angular',
+  'PostgreSQL', 'MySQL', 'MongoDB', 'Redis', 'Kafka', 'Docker', 'Kubernetes', 'AWS', 'GCP',
+  'Azure', 'Redshift', 'Snowflake', 'BigQuery', 'Airflow', 'Elasticsearch', 'GraphQL', 'REST',
+  'Git', 'CI/CD', 'Linux', 'Microservices', 'Distributed Systems', 'WebSockets', 'Tailwind',
+  'Spring Boot', 'Django', 'FastAPI', 'Express', 'Pandas', 'NumPy', 'TensorFlow', 'PyTorch'
+];
+
+function extractResumeDetails(text) {
+  if (!text || typeof text !== 'string') return {};
+  const clean = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const lines = clean.split('\n').map(l => l.trim()).filter(Boolean);
+
+  // 1. Detect Role
+  const roleRegex = /(senior|lead|principal|staff)?\s*(software engineer|full\s*stack|backend|frontend|data engineer|devops|cloud architect|solutions architect|web developer|data scientist)/i;
+  let targetRole = '';
+  for (let i = 0; i < Math.min(15, lines.length); i++) {
+    const m = lines[i].match(roleRegex);
+    if (m) {
+      targetRole = lines[i].slice(0, 60);
+      break;
+    }
+  }
+
+  // 2. Detect Skills
+  const lowerText = clean.toLowerCase();
+  const foundSkills = RESUME_TECH_CATALOG.filter(skill => {
+    const re = new RegExp('\\b' + skill.toLowerCase().replace('+', '\\+') + '\\b', 'i');
+    return re.test(lowerText);
+  });
+
+  // 3. Extract Summary
+  let summary = '';
+  const summaryHeaderIdx = lines.findIndex(l => /^(professional\s+summary|summary|profile|about\s+me)\b/i.test(l));
+  if (summaryHeaderIdx !== -1 && lines[summaryHeaderIdx + 1]) {
+    summary = lines.slice(summaryHeaderIdx + 1, summaryHeaderIdx + 5).join(' ');
+  } else {
+    summary = lines.slice(0, 4).join(' ');
+  }
+
+  // 4. Extract Projects / Experience
+  let projects = '';
+  const projHeaderIdx = lines.findIndex(l => /^(projects|key\s+projects|experience|work\s+experience)\b/i.test(l));
+  if (projHeaderIdx !== -1) {
+    projects = lines.slice(projHeaderIdx + 1, projHeaderIdx + 10).join('\n');
+  } else {
+    // Find bullet lines with bullet points
+    const bulletLines = lines.filter(l => /^[-•*]\s+/.test(l));
+    if (bulletLines.length > 0) {
+      projects = bulletLines.slice(0, 6).join('\n');
+    }
+  }
+
+  return {
+    targetRole: targetRole || 'Senior Software Engineer',
+    skills: foundSkills,
+    summary: summary.slice(0, 500),
+    projects: projects.slice(0, 600)
+  };
 }
 
 // Extract potential technical vocabulary from text to boost Deepgram
@@ -807,13 +876,27 @@ This question is NOT found in the candidate's uploaded skill Q&A PDF knowledge b
 - The exact way, tone, length, format, and structure you generate this new answer is COMPLETELY GOVERNED by the candidate's AI Guardrails prompt below.`;
   }
 
+  const candidateSkills = (Array.isArray(candidate.skills) && candidate.skills.length > 0)
+    ? candidate.skills.join(', ')
+    : "React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks";
+
+  let resumeProfile = '';
+  if (candidate.resume) {
+    resumeProfile = `\nCANDIDATE BACKGROUND & RESUME DETAILS:
+- Summary: ${candidate.resume.slice(0, 350)}
+${candidate.projects ? `- Key Projects / Experience: ${candidate.projects.slice(0, 300)}` : ''}
+- Verified Skills: ${candidateSkills}
+Tailor answers to align naturally with the candidate's real experience and target role.`;
+  }
+
   return `You are a real-time interview response assistant helping candidates answer technical interview questions with precision, confidence, and speed.
 
 ROLE & PROFILE:
 - Target Role: ${candidate.targetRole || 'Software Engineer'}
-- Skills: React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks.
+- Core Skills: ${candidateSkills}
 - Preferred Language: ${defaultLang}
 - Active Language: ${effectiveLang}
+${resumeProfile}
 ${topicNote}
 ${knowledgeSourceDirective}
 
@@ -1345,7 +1428,7 @@ app.get('/api/context', (req, res) => {
 });
 
 app.post('/api/context', (req, res) => {
-  const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language', 'preferredLanguage'];
+  const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language', 'preferredLanguage', 'resumeFileName', 'skills'];
   fields.forEach(f => { if (req.body[f] !== undefined) candidateContext[f] = req.body[f]; });
   if (req.body.pdfKnowledge && typeof req.body.pdfKnowledge === 'object') {
     candidateContext.pdfKnowledge = {
@@ -1354,6 +1437,62 @@ app.post('/api/context', (req, res) => {
     };
   }
   res.json({ success: true, context: candidateContext });
+});
+
+// Upload and parse candidate résumé (PDF or text)
+app.post('/api/context/upload-resume', async (req, res) => {
+  try {
+    const { fileName, fileBase64, rawText } = req.body;
+    let extractedText = '';
+
+    if (fileBase64) {
+      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      const parser = new PDFParse({ data: buffer });
+      const parseRes = await parser.getText();
+      await parser.destroy();
+      extractedText = parseRes.text || '';
+    } else if (rawText && typeof rawText === 'string') {
+      extractedText = rawText;
+    } else {
+      return res.status(400).json({ error: 'No résumé file data or text provided.' });
+    }
+
+    if (!extractedText.trim()) {
+      return res.status(400).json({ error: 'No readable text could be extracted from this résumé file.' });
+    }
+
+    const parsed = extractResumeDetails(extractedText);
+
+    candidateContext.resume = parsed.summary || candidateContext.resume;
+    candidateContext.targetRole = parsed.targetRole || candidateContext.targetRole;
+    if (parsed.projects) candidateContext.projects = parsed.projects;
+    candidateContext.skills = parsed.skills || [];
+    candidateContext.resumeFileName = fileName || 'Uploaded_Resume.pdf';
+    candidateContext.resumeExtractedAt = Date.now();
+
+    // Boost all skills from candidate résumé into technical vocabulary
+    if (Array.isArray(parsed.skills)) {
+      parsed.skills.forEach(skill => technicalVocabulary.add(skill));
+    }
+
+    console.log(`[Résumé Engine] Extracted details for "${candidateContext.resumeFileName}": Role: "${candidateContext.targetRole}", Skills: ${parsed.skills?.length}`);
+
+    res.json({
+      success: true,
+      fileName: candidateContext.resumeFileName,
+      parsed: {
+        targetRole: candidateContext.targetRole,
+        summary: candidateContext.resume,
+        projects: candidateContext.projects,
+        skills: candidateContext.skills
+      },
+      context: candidateContext
+    });
+  } catch (err) {
+    console.error('[Resume Parser Error]', err);
+    res.status(500).json({ error: 'Failed to parse résumé: ' + (err.message || 'Unknown error') });
+  }
 });
 
 // Upload and parse PDF or text Q&A knowledge base
