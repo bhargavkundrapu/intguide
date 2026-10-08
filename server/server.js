@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const Groq = require('groq-sdk');
+const { PDFParse } = require('pdf-parse');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
@@ -57,7 +58,8 @@ refreshGroqModels(process.env.GROQ_API_KEY);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 const PORT = process.env.PORT || 5000;
 const server = http.createServer(app);
@@ -79,8 +81,179 @@ const candidateContext = {
   projects: "1. Real-time Audio Analytics Platform: WebSockets, Node.js pipelines, React dashboard.\n2. Data Lakehouse Architecture: PySpark, Delta Lake, Databricks, Redshift, Athena for 10TB+ daily telemetry.",
   guardrails: "Use only verified candidate facts. For missing experience, give industry best-practice answer and note candidate familiarity. Never invent metrics, employers, or results.",
   language: "English",
-  preferredLanguage: "Python"
+  preferredLanguage: "Python",
+  pdfKnowledge: {
+    fileName: null,
+    fileSize: 0,
+    uploadedAt: null,
+    text: '',
+    qaPairs: []
+  }
 };
+
+// ─────────────────────────────────────────────────────────────
+//  Skill PDF Question & Answer Knowledge Base Engine
+// ─────────────────────────────────────────────────────────────
+
+function parsePdfQaPairs(text) {
+  if (!text || typeof text !== 'string') return [];
+  const clean = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const pairs = [];
+
+  // Pattern 1: Explicit Q & A / Question & Answer (newline or inline)
+  const qaRegex = /(?:^|\s+)(?:Q(?:uestion)?\s*(?:\d+)?[:.\-–]\s*)([\s\S]+?)(?=(?:\s+A(?:nswer)?\s*(?:\d+)?[:.\-–]\s*))(?:\s+A(?:nswer)?\s*(?:\d+)?[:.\-–]\s*)([\s\S]+?)(?=(?:\s+Q(?:uestion)?\s*(?:\d+)?[:.\-–])|$)/gi;
+  let match;
+  while ((match = qaRegex.exec(clean)) !== null) {
+    const q = match[1].trim().replace(/^[:.\-–\s]+/, '');
+    const a = match[2].trim().replace(/^[:.\-–\s]+/, '');
+    if (q.length > 5 && a.length > 8) {
+      pairs.push({
+        id: 'qa-' + (pairs.length + 1),
+        question: q,
+        answer: a
+      });
+    }
+  }
+
+  // Pattern 2: Numbered questions ending with question mark: e.g. 1. What is X? \n Answer text...
+  if (pairs.length === 0) {
+    const numQRegex = /(?:^|\n)\s*(?:\d+[\.\)]\s+)(.+?\?)\s*\n+([\s\S]+?)(?=(?:\n\s*\d+[\.\)]\s+.+?\?)|$)/gi;
+    while ((match = numQRegex.exec(clean)) !== null) {
+      const q = match[1].trim();
+      let a = match[2].trim().replace(/^(?:Answer|A)[:.\-–\s]*/i, '');
+      if (q.length > 5 && a.length > 8) {
+        pairs.push({
+          id: 'qa-' + (pairs.length + 1),
+          question: q,
+          answer: a
+        });
+      }
+    }
+  }
+
+  // Pattern 3: Heading questions or bold questions ending with ? followed by text
+  if (pairs.length === 0) {
+    const headingQRegex = /(?:^|\n)\s*(?:#{1,4}\s+|\*\*)?([A-Z0-9][^\n\r]+?\?)(?:\*\*)?\s*\n+([\s\S]+?)(?=(?:\n\s*(?:#{1,4}\s+|\*\*)?[A-Z0-9][^\n\r]+?\?)|$)/gi;
+    while ((match = headingQRegex.exec(clean)) !== null) {
+      const q = match[1].trim();
+      let a = match[2].trim().replace(/^(?:Answer|A)[:.\-–\s]*/i, '');
+      if (q.length > 8 && a.length > 8) {
+        pairs.push({
+          id: 'qa-' + (pairs.length + 1),
+          question: q,
+          answer: a
+        });
+      }
+    }
+  }
+
+  // Pattern 4: Fallback to structured paragraphs if strict Q&A delimiters were not found
+  if (pairs.length === 0) {
+    const paragraphs = clean.split(/\n\s*\n+/).map(p => p.trim()).filter(p => p.length > 25);
+    paragraphs.forEach((p, idx) => {
+      const lines = p.split('\n');
+      const firstLine = lines[0].trim();
+      const rest = lines.slice(1).join('\n').trim() || p;
+      pairs.push({
+        id: 'chunk-' + (idx + 1),
+        question: firstLine.length < 120 ? firstLine : firstLine.slice(0, 100) + '...',
+        answer: rest
+      });
+    });
+  }
+
+  return pairs;
+}
+
+// Stop words for fuzzy question comparison
+const QA_STOP_WORDS = new Set([
+  'a', 'an', 'the', 'is', 'are', 'was', 'were', 'what', 'how', 'do', 'does',
+  'did', 'can', 'could', 'would', 'should', 'will', 'tell', 'me', 'explain',
+  'about', 'in', 'on', 'at', 'to', 'for', 'with', 'of', 'and', 'or', 'by',
+  'from', 'we', 'you', 'your', 'i', 'my', 'please', 'give', 'describe', 'write',
+  'using', 'code', 'solution', 'difference', 'between'
+]);
+
+function stemWord(word) {
+  let w = word.toLowerCase();
+  if (w.endsWith('ing') && w.length > 5) return w.slice(0, -3);
+  if (w.endsWith('ies') && w.length > 5) return w.slice(0, -3) + 'y';
+  if (w.endsWith('es') && w.length > 4) return w.slice(0, -2);
+  if (w.endsWith('ed') && w.length > 4) return w.slice(0, -2);
+  if (w.endsWith('s') && !w.endsWith('ss') && w.length > 3) return w.slice(0, -1);
+  return w;
+}
+
+function tokenizeQa(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !QA_STOP_WORDS.has(w))
+    .map(stemWord);
+}
+
+// Search candidate's PDF knowledge base for matching interview question
+function findBestQaMatch(question, qaPairs = [], fullText = '') {
+  if (!Array.isArray(qaPairs) || qaPairs.length === 0) return null;
+  const qTokens = tokenizeQa(question);
+  if (qTokens.length === 0) return null;
+
+  let best = null;
+  let bestScore = 0;
+
+  for (const pair of qaPairs) {
+    const pairQTokens = tokenizeQa(pair.question);
+    const pairATokens = tokenizeQa(pair.answer);
+
+    // Question token overlap (heavy weight)
+    let qMatches = 0;
+    for (const qt of qTokens) {
+      if (pairQTokens.some(pt => pt === qt || pt.includes(qt) || qt.includes(pt))) {
+        qMatches++;
+      }
+    }
+
+    // Answer token overlap (supporting weight)
+    let aMatches = 0;
+    for (const qt of qTokens) {
+      if (pairATokens.some(at => at === qt || at.includes(qt) || qt.includes(at))) {
+        aMatches++;
+      }
+    }
+
+    const qScore = qTokens.length > 0 ? (qMatches / qTokens.length) : 0;
+    const aScore = qTokens.length > 0 ? (aMatches / qTokens.length) : 0;
+    const combinedScore = (qScore * 0.75) + (aScore * 0.25);
+
+    if (combinedScore > bestScore) {
+      bestScore = combinedScore;
+      best = { ...pair, score: combinedScore, qMatches, totalQTokens: qTokens.length };
+    }
+  }
+
+  // Threshold: at least 28% keyword relevance
+  if (bestScore >= 0.28 && best) {
+    return { match: best, score: bestScore, isOutOfPdf: false };
+  }
+
+  return { match: null, score: bestScore, isOutOfPdf: true };
+}
+
+// Extract potential technical vocabulary from text to boost Deepgram
+function extractVocabularyFromText(text) {
+  if (!text) return [];
+  const found = new Set();
+  const words = text.match(/\b[A-Za-z0-9_]{3,30}\b/g) || [];
+  for (const w of words) {
+    if (/^[A-Z][A-Za-z0-9]+/.test(w) || /^[a-z]+[A-Z]/.test(w) || w.includes('_')) {
+      if (!QA_STOP_WORDS.has(w.toLowerCase())) {
+        found.add(w);
+      }
+    }
+  }
+  return Array.from(found).slice(0, 100);
+}
 
 // ─────────────────────────────────────────────────────────────
 //  Technical Vocabulary & Deepgram Keyterm Prompting
@@ -568,6 +741,13 @@ function buildContext(session, currentQuestion) {
 
   const lastPair = completedPairs[completedPairs.length - 1] || null;
 
+  // Search candidate's PDF knowledge base for matching question
+  const pdfMatch = findBestQaMatch(
+    currentQuestion,
+    candidateContext.pdfKnowledge?.qaPairs,
+    candidateContext.pdfKnowledge?.text
+  );
+
   return {
     currentQuestion,
     isFollowUp: completedPairs.length > 0,
@@ -577,14 +757,17 @@ function buildContext(session, currentQuestion) {
     conversationHistory,
     activeCodingLanguage: session.activeCodingLanguage || null,
     candidate: candidateContext,
+    matchedPdfQa: pdfMatch?.match || null,
+    matchedPdfScore: pdfMatch?.score || 0,
+    isOutOfPdf: !pdfMatch || !pdfMatch.match
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-//  System prompt — continuity, language consistency, simple answers & clean code
+//  System prompt — PDF Ground Truth & AI Guardrails Governor
 // ─────────────────────────────────────────────────────────────
 function buildSystemPrompt(ctx) {
-  const { candidate, parentQuestion, parentTopic, activeCodingLanguage } = ctx;
+  const { candidate, parentQuestion, parentTopic, activeCodingLanguage, matchedPdfQa, isOutOfPdf } = ctx;
   const defaultLang = candidate.preferredLanguage || 'Python';
   const effectiveLang = activeCodingLanguage || defaultLang;
 
@@ -595,19 +778,58 @@ function buildSystemPrompt(ctx) {
 - Seamlessly build upon the established technical context. If the question refers to a sub-part, clause, or follow-up (e.g. data skew, partitions, salting, transaction log), answer directly within this ongoing topic architecture.`;
   }
 
+  // Candidate's AI Guardrails prompt takes absolute precedence over how the answer is generated
+  const guardrailsPrompt = (candidate.guardrails && candidate.guardrails.trim())
+    ? candidate.guardrails.trim()
+    : "Provide direct, concise, high-impact technical answers in 2-4 sentences or clean code. Never invent fake metrics, employers, or experience.";
+
+  let knowledgeSourceDirective = '';
+  if (matchedPdfQa) {
+    knowledgeSourceDirective = `
+================================================================================
+KNOWLEDGE SOURCE DIRECTIVE (ANSWER FROM CANDIDATE'S UPLOADED PDF):
+================================================================================
+The interviewer's question is COVERED in the candidate's skill Q&A PDF!
+- Matched PDF Question: "${matchedPdfQa.question}"
+- Authoritative PDF Answer Ground Truth:
+"""
+${matchedPdfQa.answer}
+"""
+- MANDATORY INSTRUCTION: You MUST formulate and provide the answer according to the above PDF answer ground truth!
+- The exact way, tone, length, and format you generate/deliver this answer is COMPLETELY GOVERNED by the candidate's AI Guardrails prompt below.`;
+  } else if (candidate.pdfKnowledge?.qaPairs?.length > 0 || candidate.pdfKnowledge?.text) {
+    knowledgeSourceDirective = `
+================================================================================
+KNOWLEDGE SOURCE DIRECTIVE (OUT OF PDF - GENERATE NEW ANSWER):
+================================================================================
+This question is NOT found in the candidate's uploaded skill Q&A PDF knowledge base.
+- MANDATORY INSTRUCTION: You are authorized and required to generate a brand new technical answer using your knowledge and industry best practices.
+- The exact way, tone, length, format, and structure you generate this new answer is COMPLETELY GOVERNED by the candidate's AI Guardrails prompt below.`;
+  }
+
   return `You are a real-time interview response assistant helping candidates answer technical interview questions with precision, confidence, and speed.
 
 ROLE & PROFILE:
-- Target Role: ${candidate.targetRole}
+- Target Role: ${candidate.targetRole || 'Software Engineer'}
 - Skills: React, Node.js, TypeScript, PostgreSQL, Distributed Systems, WebSockets, PySpark, Databricks.
 - Preferred Language: ${defaultLang}
 - Active Language: ${effectiveLang}
 ${topicNote}
+${knowledgeSourceDirective}
 
-RULES:
-1. Direct, concise answer in 2–4 short sentences. Start directly with the technical answer. No conversational filler or greetings.
+================================================================================
+PRIMARY GOVERNOR: CANDIDATE'S AI GUARDRAILS PROMPT
+================================================================================
+How to generate the answer and in what exact way/style/format it should be generated is COMPLETELY DEPENDENT on the following AI Guardrails prompt provided by the candidate:
+"""
+${guardrailsPrompt}
+"""
+You MUST strictly follow all constraints, formatting rules, tone guidelines, and directives in this AI Guardrails prompt above.
+
+GENERAL BASELINE CONSTRAINTS:
+1. Direct, concise technical answer. No conversational filler or greetings ("Certainly", "Sure", "Great question").
 2. CRITICAL CONSTRAINT: NEVER ask clarifying questions, NEVER ask "Could you clarify...", and NEVER ask the user/interviewer for more information. Under all circumstances, provide the direct, best-practice technical answer immediately based on the most likely interview intent.
-3. If asked to code: give one short sentence of approach, one clean code block with language fence (\`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql), and two short sentences explaining key logic.
+3. If asked to code: give one short sentence of approach, one clean code block with language fence (\`\`\`${effectiveLang.toLowerCase()} or \`\`\`sql), and explanation following the AI Guardrails.
 4. Language hierarchy: (a) Use explicitly requested language; (b) For follow-up code, stay in ${effectiveLang}; (c) SQL for DB queries; (d) PySpark for data pipelines; (e) ${defaultLang} for general algorithms.
 5. Do not include unnecessary boilerplate, filler classes, or unsolicited complexity sections unless specifically asked.`;
 }
@@ -808,7 +1030,10 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   session.activeAbort = abort;
   session.activeReqId = reqId;
 
-  // Create answer message
+  const ctx = buildContext(session, question);
+  const systemPrompt = buildSystemPrompt(ctx);
+
+  // Create answer message with source tags
   const aMsg = {
     id: aMsgId,
     role: 'answer',
@@ -818,7 +1043,10 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     reqId,
     ttft: 0,
     totalTime: 0,
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    source: ctx.matchedPdfQa ? 'pdf' : 'generated',
+    matchedPdfQuestion: ctx.matchedPdfQa ? ctx.matchedPdfQa.question : null,
+    matchedScore: ctx.matchedPdfScore || 0
   };
   session.messages.push(aMsg);
 
@@ -830,15 +1058,19 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
     role: 'answer',
     text: continueFromText,
     status: 'streaming',
+    source: aMsg.source,
+    matchedPdfQuestion: aMsg.matchedPdfQuestion,
     sessionId
   });
 
-  const ctx = buildContext(session, question);
-  const systemPrompt = buildSystemPrompt(ctx);
-
-  const userContent = continueFromText
-    ? `Continue from where you stopped. Do NOT repeat what was already said.\n\nPrevious partial answer:\n${continueFromText}\n\nOriginal question: "${question}"`
-    : `INTERVIEW QUESTION: "${question}"`;
+  let userContent = '';
+  if (continueFromText) {
+    userContent = `Continue from where you stopped. Do NOT repeat what was already said.\n\nPrevious partial answer:\n${continueFromText}\n\nOriginal question: "${question}"`;
+  } else if (ctx.matchedPdfQa) {
+    userContent = `INTERVIEW QUESTION: "${question}"\n\n[KNOWLEDGE SOURCE: MATCHED FROM CANDIDATE'S UPLOADED PDF]\nMatched PDF Question: "${ctx.matchedPdfQa.question}"\nAuthoritative PDF Answer Ground Truth:\n"""\n${ctx.matchedPdfQa.answer}\n"""\n\nDIRECTIVE: Synthesize and deliver the answer based on the above PDF ground truth. Structure and format the response strictly according to the AI Guardrails prompt.`;
+  } else {
+    userContent = `INTERVIEW QUESTION: "${question}"\n\n[KNOWLEDGE SOURCE: OUT OF PDF]\nDIRECTIVE: This question is not in the candidate's PDF. Generate a new, accurate technical answer based on industry best practices, completely governed by the AI Guardrails prompt.`;
+  }
 
   // True multi-turn conversation messages: System Prompt + Recent Conversation Exchanges + Current Question
   const chatMessages = [
@@ -850,7 +1082,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   const groqKey = process.env.GROQ_API_KEY;
 
   if (!groqKey) {
-    await streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, abort.signal, continueFromText);
+    await streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, abort.signal, continueFromText, ctx);
     return;
   }
 
@@ -901,6 +1133,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
             msgId: aMsgId,
             reqId,
             ttft: aMsg.ttft,
+            source: aMsg.source,
+            matchedPdfQuestion: aMsg.matchedPdfQuestion,
             sessionId
           });
         }
@@ -912,6 +1146,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
           seqNo: seqNo++,
           chunk: text,
           fullText: accumulated,
+          source: aMsg.source,
+          matchedPdfQuestion: aMsg.matchedPdfQuestion,
           sessionId
         });
       }
@@ -933,6 +1169,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
           reqId,
           fullText: accumulated,
           totalTime,
+          source: aMsg.source,
+          matchedPdfQuestion: aMsg.matchedPdfQuestion,
           sessionId
         });
 
@@ -973,7 +1211,7 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
   if (!abort.signal.aborted && session.activeReqId === reqId) {
     if (aMsg.text.length === 0) {
       // Nothing was generated — fall back to intelligent responder immediately
-      await streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, abort.signal, continueFromText);
+      await streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, abort.signal, continueFromText, ctx);
     } else {
       // Some text was generated — finalize cleanly so the user gets a readable answer
       const totalTime = Date.now() - startTime;
@@ -985,6 +1223,8 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
         reqId,
         fullText: aMsg.text,
         totalTime,
+        source: aMsg.source,
+        matchedPdfQuestion: aMsg.matchedPdfQuestion,
         sessionId
       });
     }
@@ -997,14 +1237,17 @@ async function streamAiAnswer(sessionId, question, questionMsgId, session, conti
 // ─────────────────────────────────────────────────────────────
 //  Mock fallback streamer (no API key / all models failed)
 // ─────────────────────────────────────────────────────────────
-async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, signal, prefix = '') {
+async function streamMockAnswer(sessionId, question, aMsgId, reqId, startTime, signal, prefix = '', ctx = null) {
   const session = sessions.get(sessionId);
   const q = question.toLowerCase();
 
   let text = prefix;
   let answer = '';
 
-  if (q.includes('duplicate') || (q.includes('python') && (q.includes('list') || q.includes('array')))) {
+  if (ctx && ctx.matchedPdfQa && ctx.matchedPdfQa.answer) {
+    // Delivered directly from candidate's uploaded PDF!
+    answer = ctx.matchedPdfQa.answer;
+  } else if (q.includes('duplicate') || (q.includes('python') && (q.includes('list') || q.includes('array')))) {
     if (q.includes('without') && (q.includes('count') || q.includes('counter') || q.includes('set') || q.includes('predefined'))) {
       answer = `To find duplicates and their counts without using predefined functions like Counter, count, or set, use a manual hash map (dictionary) in a single pass.\n\n\`\`\`python\ndef find_duplicates(items):\n    counts = {}\n    duplicates = {}\n    \n    # Count frequencies manually\n    for item in items:\n        if item in counts:\n            counts[item] += 1\n        else:\n            counts[item] = 1\n            \n    # Filter items that appear more than once\n    for item, freq in counts.items():\n        if freq > 1:\n            duplicates[item] = freq\n            \n    return duplicates\n\`\`\`\n\nThis operates in O(n) time and O(k) auxiliary space where k is unique values, strictly without Counter or set.`;
     } else {
@@ -1086,11 +1329,108 @@ app.get('/api/info', (req, res) => {
   });
 });
 
-app.get('/api/context', (req, res) => res.json(candidateContext));
+app.get('/api/context', (req, res) => {
+  const ctx = {
+    ...candidateContext,
+    pdfKnowledge: {
+      fileName: candidateContext.pdfKnowledge?.fileName || null,
+      fileSize: candidateContext.pdfKnowledge?.fileSize || 0,
+      uploadedAt: candidateContext.pdfKnowledge?.uploadedAt || null,
+      qaCount: candidateContext.pdfKnowledge?.qaPairs?.length || 0,
+      qaPairs: (candidateContext.pdfKnowledge?.qaPairs || []).slice(0, 100),
+      hasText: Boolean(candidateContext.pdfKnowledge?.text)
+    }
+  };
+  res.json(ctx);
+});
+
 app.post('/api/context', (req, res) => {
   const fields = ['resume', 'targetRole', 'jobDescription', 'projects', 'guardrails', 'language', 'preferredLanguage'];
   fields.forEach(f => { if (req.body[f] !== undefined) candidateContext[f] = req.body[f]; });
+  if (req.body.pdfKnowledge && typeof req.body.pdfKnowledge === 'object') {
+    candidateContext.pdfKnowledge = {
+      ...candidateContext.pdfKnowledge,
+      ...req.body.pdfKnowledge
+    };
+  }
   res.json({ success: true, context: candidateContext });
+});
+
+// Upload and parse PDF or text Q&A knowledge base
+app.post('/api/context/upload-pdf', async (req, res) => {
+  try {
+    const { fileName, fileBase64, rawText } = req.body;
+    let extractedText = '';
+
+    if (fileBase64) {
+      // Decode base64 PDF and parse text
+      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      const parser = new PDFParse({ data: buffer });
+      const parseRes = await parser.getText();
+      await parser.destroy();
+      extractedText = parseRes.text || '';
+    } else if (rawText && typeof rawText === 'string') {
+      extractedText = rawText;
+    } else {
+      return res.status(400).json({ error: 'No PDF file data or text provided.' });
+    }
+
+    if (!extractedText.trim()) {
+      return res.status(400).json({ error: 'No readable text could be extracted from this document. Please ensure it is a valid text-based PDF.' });
+    }
+
+    const qaPairs = parsePdfQaPairs(extractedText);
+
+    candidateContext.pdfKnowledge = {
+      fileName: fileName || (fileBase64 ? 'Uploaded_QA.pdf' : 'Pasted_QA.txt'),
+      fileSize: fileBase64 ? Math.round(fileBase64.length * 0.75) : extractedText.length,
+      uploadedAt: Date.now(),
+      text: extractedText,
+      qaPairs
+    };
+
+    // Auto-boost technical terms found in PDF into speech vocabulary!
+    const extractedVocab = extractVocabularyFromText(extractedText);
+    for (const term of extractedVocab) {
+      technicalVocabulary.add(term);
+    }
+
+    console.log(`[PDF Engine] Loaded "${candidateContext.pdfKnowledge.fileName}": ${qaPairs.length} Q&A pairs extracted, ${extractedVocab.length} keyterms boosted.`);
+
+    res.json({
+      success: true,
+      fileName: candidateContext.pdfKnowledge.fileName,
+      qaCount: qaPairs.length,
+      qaPairs: qaPairs.slice(0, 100),
+      totalChars: extractedText.length,
+      newVocabCount: extractedVocab.length
+    });
+  } catch (err) {
+    console.error('[PDF Parser Error]', err);
+    res.status(500).json({ error: 'Failed to parse PDF document: ' + (err.message || 'Unknown error') });
+  }
+});
+
+// Clear PDF knowledge
+app.post('/api/context/clear-pdf', (req, res) => {
+  candidateContext.pdfKnowledge = {
+    fileName: null,
+    fileSize: 0,
+    uploadedAt: null,
+    text: '',
+    qaPairs: []
+  };
+  res.json({ success: true });
+});
+
+// Query / View extracted Q&A pairs
+app.get('/api/context/pdf-qa', (req, res) => {
+  res.json({
+    fileName: candidateContext.pdfKnowledge?.fileName || null,
+    qaCount: candidateContext.pdfKnowledge?.qaPairs?.length || 0,
+    qaPairs: candidateContext.pdfKnowledge?.qaPairs || []
+  });
 });
 
 app.get('/api/vocabulary', (req, res) => {

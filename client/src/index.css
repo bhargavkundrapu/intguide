@@ -1691,4 +1691,147 @@ body {
   }
 }
 
+/* ══════════════════════════════════════════════
+   PDF KNOWLEDGE BASE & GUARDRAILS STYLES
+══════════════════════════════════════════════ */
+.badge-emerald {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+}
+
+.badge-purple {
+  background: #faf5ff;
+  color: #7c3aed;
+  border: 1px solid #e9d5ff;
+}
+
+.pdf-upload-dropzone {
+  border: 2px dashed var(--gray-300);
+  border-radius: 9px;
+  padding: 16px 14px;
+  text-align: center;
+  background: var(--gray-50);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-upload-dropzone:hover {
+  border-color: var(--blue-500);
+  background: #eff6ff;
+}
+
+.pdf-upload-dropzone.dragover {
+  border-color: var(--blue-600);
+  background: #dbeafe;
+}
+
+.pdf-card-active {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 9px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdf-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pdf-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pdf-card-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #dcfce7;
+  border: 1px solid #86efac;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #15803d;
+  flex-shrink: 0;
+}
+
+.pdf-card-filename {
+  font-size: 13px;
+  font-weight: 600;
+  color: #14532d;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-card-sub {
+  font-size: 11px;
+  color: #166534;
+}
+
+.pdf-preview-box {
+  background: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pdf-qa-item {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.pdf-qa-q {
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.pdf-qa-a {
+  color: var(--gray-600);
+  line-height: 1.4;
+  font-size: 11px;
+}
+
+.guardrail-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  color: var(--gray-700);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.guardrail-chip:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+
 

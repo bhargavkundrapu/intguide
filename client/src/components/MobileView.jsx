@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff, Edit2, AlertTriangle } from 'lucide-react';
+import { Zap, Play, Pause, RotateCcw, Wifi, WifiOff, Sparkles, Mic, MicOff, Edit2, AlertTriangle, FileText } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
 function MobileQuestionCard({ msg, onEditQuestion }) {
@@ -450,7 +450,16 @@ export default function MobileView({
                 <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--blue-600)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   AI Copilot
                 </div>
-                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+                  {msg.source === 'pdf' ? (
+                    <span className="badge badge-emerald" style={{ fontSize: 9, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <FileText size={9} /> PDF Q&A
+                    </span>
+                  ) : msg.source === 'generated' ? (
+                    <span className="badge badge-purple" style={{ fontSize: 9, padding: '1px 5px', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                      <Sparkles size={9} /> Guardrails
+                    </span>
+                  ) : null}
                   {msg.status === 'streaming' && (
                     <span className="badge badge-blue" style={{ fontSize: 10 }}>
                       <div className="status-dot live" style={{ marginRight: 2 }} /> Answering

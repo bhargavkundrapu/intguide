@@ -263,11 +263,19 @@ export default function App() {
               text: data.fullText,
               status: 'streaming',
               reqId: data.reqId,
+              source: data.source,
+              matchedPdfQuestion: data.matchedPdfQuestion,
               createdAt: Date.now()
             }];
           }
           const updated = [...prev];
-          updated[idx] = { ...updated[idx], text: data.fullText, status: 'streaming' };
+          updated[idx] = {
+            ...updated[idx],
+            text: data.fullText,
+            status: 'streaming',
+            ...(data.source ? { source: data.source } : {}),
+            ...(data.matchedPdfQuestion ? { matchedPdfQuestion: data.matchedPdfQuestion } : {})
+          };
           return updated;
         });
         break;
@@ -284,11 +292,20 @@ export default function App() {
               text: data.fullText,
               status: 'complete',
               totalTime: data.totalTime,
+              source: data.source,
+              matchedPdfQuestion: data.matchedPdfQuestion,
               createdAt: Date.now()
             }];
           }
           const updated = [...prev];
-          updated[idx] = { ...updated[idx], text: data.fullText, status: 'complete', totalTime: data.totalTime };
+          updated[idx] = {
+            ...updated[idx],
+            text: data.fullText,
+            status: 'complete',
+            totalTime: data.totalTime,
+            ...(data.source ? { source: data.source } : {}),
+            ...(data.matchedPdfQuestion ? { matchedPdfQuestion: data.matchedPdfQuestion } : {})
+          };
           return updated;
         });
         break;

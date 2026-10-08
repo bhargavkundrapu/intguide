@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   User, Sparkles, Zap, AlertCircle, CheckCircle, Clock,
-  ArrowDown, RefreshCw, Copy, Check, ChevronDown, Edit2, AlertTriangle
+  ArrowDown, RefreshCw, Copy, Check, ChevronDown, Edit2, AlertTriangle, FileText
 } from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 
@@ -169,6 +169,25 @@ function MessageBubble({ msg, onContinue, onExplainMore, onEditQuestion }) {
           AI Copilot
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {msg.source === 'pdf' ? (
+            <span
+              className="badge badge-emerald"
+              title={msg.matchedPdfQuestion ? `Matched from PDF: "${msg.matchedPdfQuestion}"` : 'Answered according to uploaded skill PDF'}
+              style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'help' }}
+            >
+              <FileText size={10} />
+              From PDF Q&A
+            </span>
+          ) : msg.source === 'generated' ? (
+            <span
+              className="badge badge-purple"
+              title="Question was out of PDF. Generated per AI Guardrails."
+              style={{ fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 3, cursor: 'help' }}
+            >
+              <Sparkles size={10} />
+              New (AI Guardrails)
+            </span>
+          ) : null}
           <StatusBadge status={msg.status} />
           {msg.ttft > 0 && (
             <span className="ttft-chip" style={{ fontSize: 10 }}>
